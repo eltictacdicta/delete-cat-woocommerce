@@ -150,7 +150,7 @@ function display_category_id_form() {
         
         <div class="card">
             <h2>Cambiar categoría del primer producto</h2>
-            <form method="post" action="">
+            <form id="category-transfer-form" method="post" action="">
                 <input type="hidden" name="submitted" value="1">
                 <table class="form-table">
                     <tr>
@@ -168,7 +168,8 @@ function display_category_id_form() {
                         </td>
                     </tr>
                 </table>
-                <?php submit_button('Cambiar Categoría del Primer Producto'); ?>
+                <?php submit_button('Cambiar Categoría del Primer Producto', 'primary', 'submit', false); ?>
+                <div id="transfer-status"></div>
             </form>
         </div>
         
@@ -190,6 +191,60 @@ function display_category_id_form() {
             </form>
         </div>
     </div>
+    
+    <script>
+    jQuery(document).ready(function($) {
+        $('#category-transfer-form').on('submit', function(e) {
+            e.preventDefault();
+            
+            var form = $(this);
+            var statusDiv = $('#transfer-status');
+            statusDiv.html('<div class="notice notice-info"><p>Procesando solicitud...</p></div>');
+            
+            $.ajax({
+                type: 'POST',
+                url: ajaxurl,
+                dataType: 'json',
+                data: {
+                    action: 'transfer_product_category',
+                    category_url_origin: $('#category_url_origin').val(),
+                    category_url_destination: $('#category_url_destination').val(),
+                    security: '<?php echo wp_create_nonce("transfer_category_nonce"); ?>'
+                },
+                success: function(response) {
+                    var html = '';
+                    if(response.success) {
+                        html = '<div class="notice notice-success"><p>' + response.message + '</p>';
+                    } else {
+                        html = '<div class="notice notice-error"><p>' + response.message + '</p>';
+                    }
+                    
+                    if(response.details && response.details.length > 0) {
+                        html += '<ul>';
+                        response.details.forEach(function(detail) {
+                            html += '<li>' + detail + '</li>';
+                        });
+                        html += '</ul>';
+                    }
+                    
+                    html += '</div>';
+                    statusDiv.html(html);
+                },
+                error: function(xhr, status, error) {
+                    var errorMessage = 'Error en la comunicación con el servidor';
+                    try {
+                        if(xhr.responseJSON && xhr.responseJSON.message) {
+                            errorMessage = xhr.responseJSON.message;
+                        }
+                    } catch(e) {
+                        console.error('Error parsing response:', e);
+                    }
+                    statusDiv.html('<div class="notice notice-error"><p>' + errorMessage + '</p></div>');
+                }
+            });
+        });
+    });
+    </script>
     <?php
 }
 
@@ -206,3 +261,72 @@ function add_category_id_form_to_admin_menu() {
     );
 }
 add_action('admin_menu', 'add_category_id_form_to_admin_menu');
+
+// Añadir el manejador AJAX
+add_action('wp_ajax_transfer_product_category', 'handle_ajax_transfer_product_category');
+function handle_ajax_transfer_product_category() {
+    check_ajax_referer('transfer_category_nonce', 'security');
+    
+    // Limpiar cualquier output previo
+    if (ob_get_length()) ob_clean();
+    
+    header('Content-Type: application/json');
+    
+    try {
+        if (!isset($_POST['category_url_origin']) || !isset($_POST['category_url_destination'])) {
+            throw new Exception('Faltan datos del formulario.');
+        }
+        
+        $category_url_origin = esc_url_raw($_POST['category_url_origin']);
+        $category_url_destination = esc_url_raw($_POST['category_url_destination']);
+        
+        // Obtener IDs de categorías
+        $category_id_origin = get_category_id_from_url($category_url_origin);
+        if (!$category_id_origin) {
+            throw new Exception('No se pudo obtener el ID de la categoría de origen. Verifica la URL.');
+        }
+        
+        $category_id_destination = get_category_id_from_url($category_url_destination);
+        if (!$category_id_destination) {
+            throw new Exception('No se pudo obtener el ID de la categoría de destino. Verifica la URL.');
+        }
+        
+        // Obtener productos
+        $products_data = get_products_by_category_id($category_id_origin);
+        if ($products_data['products'] === false) {
+            throw new Exception('No se encontraron productos en la categoría de origen.');
+        }
+        
+        $first_product = reset($products_data['products']);
+        if (!$first_product) {
+            throw new Exception('No hay productos disponibles en la categoría de origen.');
+        }
+        
+        // Procesar el cambio de categoría
+        $result = replace_product_category($first_product['id'], $category_id_origin, $category_id_destination);
+        
+        $response = [
+            'success' => $result['success'],
+            'message' => $result['success'] ? 
+                'Operación completada exitosamente.' : 
+                'Error en la operación.',
+            'details' => $result['messages'],
+            'debug' => [
+                'origin_category' => $category_id_origin,
+                'destination_category' => $category_id_destination,
+                'product_id' => $first_product['id']
+            ]
+        ];
+        
+        wp_send_json($response);
+        
+    } catch (Exception $e) {
+        wp_send_json([
+            'success' => false,
+            'message' => $e->getMessage(),
+            'details' => []
+        ]);
+    }
+    
+    exit;
+}

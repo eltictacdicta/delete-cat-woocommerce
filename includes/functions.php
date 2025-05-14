@@ -37,12 +37,14 @@ function get_category_id_from_url($category_url) {
  * @return array|false Array de productos si se encuentra la categoría, o false si no.
  */
 function get_products_by_category_id($category_id) {
-    echo '<div class="notice notice-info"><p>ID de categoría origen: ' . esc_html($category_id) . '</p></div>';
+    $output = []; // Almacenar mensajes aquí
+    
     if (!$category_id) {
+        $output[] = '<div class="notice notice-error"><p>ID de categoría inválido</p></div>';
         return false;
     }
 
-    // Limpiar caché de términos y objetos antes de la consulta
+    // Limpiar caché
     clean_term_cache(array($category_id), 'product_cat');
     wp_cache_flush();
 
@@ -54,20 +56,16 @@ function get_products_by_category_id($category_id) {
                 'taxonomy' => 'product_cat',
                 'field' => 'term_id',
                 'terms' => $category_id,
-                'include_children' => false, // Solo incluir productos directamente asignados a esta categoría
+                'include_children' => false,
             )
         )
     );
     
-    // Registrar la consulta para depuración
-    error_log('Consulta de productos para categoría ID: ' . $category_id . ', args: ' . print_r($args, true));
-    
     $products_query = new WP_Query($args);
-    error_log('Productos encontrados: ' . $products_query->post_count);
-
+    
     if (!$products_query->have_posts()) {
-        echo '<div class="notice notice-warning"><p>No se encontraron productos en la categoría ID: ' . esc_html($category_id) . '</p></div>';
-        return false;
+        $output[] = '<div class="notice notice-warning"><p>No se encontraron productos en la categoría ID: ' . esc_html($category_id) . '</p></div>';
+        return ['products' => false, 'output' => $output];
     }
 
     $products = array();
@@ -75,7 +73,6 @@ function get_products_by_category_id($category_id) {
         $products_query->the_post();
         $product_id = get_the_ID();
         
-        // Verificar que el producto realmente pertenezca a la categoría
         $actual_categories = wp_get_post_terms($product_id, 'product_cat', array('fields' => 'ids'));
         
         if (in_array($category_id, $actual_categories)) {
@@ -83,15 +80,11 @@ function get_products_by_category_id($category_id) {
                 'id' => $product_id,
                 'title' => get_the_title(),
             );
-        } else {
-            error_log('Producto ID ' . $product_id . ' no está realmente en la categoría ' . $category_id . '. Categorías actuales: ' . implode(', ', $actual_categories));
         }
     }
     wp_reset_postdata();
     
-    echo '<div class="notice notice-info"><p>Productos válidos encontrados en la categoría: ' . count($products) . '</p></div>';
-    
-    return !empty($products) ? $products : false;
+    return ['products' => $products, 'output' => $output];
 }
 
 /**
@@ -181,26 +174,20 @@ function get_product_category_ids($product_id) {
  * @return bool True si la operación fue exitosa, false si hubo un error.
  */
 function replace_product_category($product_id, $category_to_unlink, $category_to_assign) {
-    // Mostrar información de depuración
-    echo '<div class="notice notice-info">';
-    echo '<p>Producto ID: ' . esc_html($product_id) . '</p>';
-    echo '<p>Categoría a desvincular ID: ' . esc_html($category_to_unlink) . '</p>'; 
-    echo '<p>Categoría a asignar ID: ' . esc_html($category_to_assign) . '</p>';
-    echo '</div>';
-
+    $messages = array();
+    
     // Verificar que el producto y las categorías existan
     if (!get_post($product_id) || !term_exists($category_to_unlink, 'product_cat') || !term_exists($category_to_assign, 'product_cat')) {
-        echo '<div class="notice notice-error"><p>El producto o las categorías no existen.</p></div>';
-        return false;
+        $messages[] = 'El producto o las categorías no existen.';
+        return array('success' => false, 'messages' => $messages);
     }
 
     // Limpiar caché antes de obtener categorías
     clean_term_cache(array($category_to_unlink, $category_to_assign), 'product_cat');
     clean_post_cache($product_id);
 
-    // Mostrar categorías actuales del producto
     $current_categories = get_product_category_ids($product_id);
-    echo '<div class="notice notice-info"><p>Categorías actuales: ' . implode(', ', $current_categories) . '</p></div>';
+    $messages[] = 'Categorías actuales: ' . implode(', ', $current_categories);
 
     // Verificar si la categoría destino ya está asignada
     $is_assign_category_present = in_array($category_to_assign, $current_categories);
@@ -209,70 +196,52 @@ function replace_product_category($product_id, $category_to_unlink, $category_to
     $is_unlink_category_present = in_array($category_to_unlink, $current_categories);
     
     if (!$is_unlink_category_present) {
-        // Si la categoría a desvincular no está presente, mostramos un error claro
-        echo '<div class="notice notice-error"><p><strong>Error:</strong> El producto con ID ' . esc_html($product_id) . ' no pertenece a la categoría origen con ID ' . esc_html($category_to_unlink) . '.</p>';
-        echo '<p>Esto puede deberse a las siguientes razones:</p>';
-        echo '<ul>';
-        echo '<li>El producto se encontró incorrectamente por la consulta WP_Query</li>';
-        echo '<li>El producto fue eliminado recientemente de esta categoría</li>';
-        echo '<li>Hay problemas con la caché de WordPress</li>';
-        echo '<li>Existen problemas en la base de datos con las relaciones de taxonomía</li>';
-        echo '</ul></div>';
+        $messages[] = 'Error: El producto con ID ' . $product_id . ' no pertenece a la categoría origen con ID ' . $category_to_unlink . '.';
         
-        // Si la categoría destino ya está asignada, consideramos que la operación es parcialmente exitosa
         if ($is_assign_category_present) {
-            echo '<div class="notice notice-success"><p>El producto ya está asignado a la categoría destino. Operación parcialmente completada.</p></div>';
-            return true;
+            $messages[] = 'El producto ya está asignado a la categoría destino. Operación parcialmente completada.';
+            return array('success' => true, 'messages' => $messages);
         }
-        
-        // Si el usuario quiere forzar la asignación a la categoría destino aunque no esté en la origen
-        // podemos continuar con la asignación (no el desvinculado)
     }
 
     // 1. Asignamos la nueva categoría si no está ya asignada
     if (!$is_assign_category_present) {
         $assign_result = assign_product_to_category($product_id, $category_to_assign);
         if (!$assign_result) {
-            echo '<div class="notice notice-error"><p>Error al asignar la categoría destino.</p></div>';
-            return false;
+            $messages[] = 'Error al asignar la categoría destino.';
+            return array('success' => false, 'messages' => $messages);
         }
         else {
-            echo '<div class="notice notice-success"><p>Categoría destino asignada exitosamente.</p></div>';
+            $messages[] = 'Categoría destino asignada exitosamente.';
         }
         
-        // Actualizar lista de categorías después de asignar
         $current_categories = get_product_category_ids($product_id);
     } else {
-        echo '<div class="notice notice-info"><p>El producto ya está asignado a la categoría destino.</p></div>';
+        $messages[] = 'El producto ya está asignado a la categoría destino.';
     }
-
-    // Mostrar categorías después de asignar
-    echo '<div class="notice notice-info"><p>Categorías después de asignar: ' . implode(', ', $current_categories) . '</p></div>';
 
     // 2. Desvincular la categoría origen si está presente
     if ($is_unlink_category_present) {
-        // Verificar que al desvincular no se quede sin categorías
         if (count($current_categories) < 2) {
-            echo '<div class="notice notice-error"><p>El producto solo tiene una categoría y no se puede desvincular.</p></div>';
-            return false;
+            $messages[] = 'El producto solo tiene una categoría y no se puede desvincular.';
+            return array('success' => false, 'messages' => $messages);
         }
         
         $unlink_result = unlink_product_from_category($product_id, $category_to_unlink);
         
         if (!$unlink_result) {
-            echo '<div class="notice notice-error"><p>Error al desvincular la categoría origen.</p></div>';
-            return false;
+            $messages[] = 'Error al desvincular la categoría origen.';
+            return array('success' => false, 'messages' => $messages);
         }
         
-        echo '<div class="notice notice-success"><p>Categoría origen desvinculada exitosamente.</p></div>';
+        $messages[] = 'Categoría origen desvinculada exitosamente.';
     }
 
-    // Mostrar categorías finales
     $final_categories = get_product_category_ids($product_id);
-    echo '<div class="notice notice-info"><p>Categorías finales: ' . implode(', ', $final_categories) . '</p></div>';
-
-    echo '<div class="notice notice-success"><p>Operación completada exitosamente.</p></div>';
-    return true;
+    $messages[] = 'Categorías finales: ' . implode(', ', $final_categories);
+    $messages[] = 'Operación completada exitosamente.';
+    
+    return array('success' => true, 'messages' => $messages);
 }
 
 /**
