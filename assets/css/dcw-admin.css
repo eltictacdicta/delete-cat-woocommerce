@@ -1,0 +1,91 @@
+/* Estilos para el plugin Delete Categories for WooCommerce */
+
+/* Estilos para la barra de progreso */
+.dcw-progress-container {
+    width: 100%;
+    background-color: #f1f1f1;
+    border-radius: 4px;
+    margin: 20px 0;
+    height: 30px;
+    overflow: hidden;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.dcw-progress-bar {
+    height: 30px;
+    background-color: #0073aa;
+    color: white;
+    text-align: center;
+    line-height: 30px;
+    transition: width 0.3s ease;
+    border-radius: 4px;
+}
+
+#dcw-current-operation {
+    margin: 10px 0;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+#dcw-status-messages {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #e5e5e5;
+    background-color: #f9f9f9;
+    padding: 10px;
+    margin-top: 15px;
+    border-radius: 4px;
+}
+
+#dcw-status-messages p {
+    margin: 5px 0;
+    font-size: 13px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
+}
+
+#dcw-status-messages p:last-child {
+    border-bottom: none;
+}
+
+/* Estilos para indicadores de estado */
+.status-completado {
+    color: #46b450;
+    font-weight: bold;
+}
+
+.status-fallido {
+    color: #dc3232;
+    font-weight: bold;
+}
+
+.status-saltado {
+    color: #ffb900;
+    font-weight: bold;
+}
+
+/* Estilos para el formulario */
+.dcw-form-section {
+    background: #fff;
+    padding: 20px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.dcw-form-section h2 {
+    margin-top: 0;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+}
+
+#dcw-batch-size {
+    width: 80px;
+}
+
+.dcw-description {
+    font-style: italic;
+    color: #666;
+    margin-top: 5px;
+    font-size: 13px;
+} 

@@ -175,6 +175,7 @@ function get_product_category_ids($product_id) {
  */
 function replace_product_category($product_id, $category_to_unlink, $category_to_assign) {
     $messages = array();
+    $product_title = get_the_title($product_id);
     
     // Verificar que el producto y las categorías existan
     if (!get_post($product_id) || !term_exists($category_to_unlink, 'product_cat') || !term_exists($category_to_assign, 'product_cat')) {
@@ -188,6 +189,7 @@ function replace_product_category($product_id, $category_to_unlink, $category_to
 
     $current_categories = get_product_category_ids($product_id);
     $messages[] = 'Categorías actuales: ' . implode(', ', $current_categories);
+    $messages[] = 'Producto afectado: ' . $product_title;
 
     // Verificar si la categoría destino ya está asignada
     $is_assign_category_present = in_array($category_to_assign, $current_categories);
@@ -196,11 +198,11 @@ function replace_product_category($product_id, $category_to_unlink, $category_to
     $is_unlink_category_present = in_array($category_to_unlink, $current_categories);
     
     if (!$is_unlink_category_present) {
-        $messages[] = 'Error: El producto con ID ' . $product_id . ' no pertenece a la categoría origen con ID ' . $category_to_unlink . '.';
+        $messages[] = 'Error: El producto "' . $product_title . '" (ID ' . $product_id . ') no pertenece a la categoría origen con ID ' . $category_to_unlink . '.';
         
         if ($is_assign_category_present) {
             $messages[] = 'El producto ya está asignado a la categoría destino. Operación parcialmente completada.';
-            return array('success' => true, 'messages' => $messages);
+            return array('success' => true, 'messages' => $messages, 'product_title' => $product_title);
         }
     }
 
@@ -209,7 +211,7 @@ function replace_product_category($product_id, $category_to_unlink, $category_to
         $assign_result = assign_product_to_category($product_id, $category_to_assign);
         if (!$assign_result) {
             $messages[] = 'Error al asignar la categoría destino.';
-            return array('success' => false, 'messages' => $messages);
+            return array('success' => false, 'messages' => $messages, 'product_title' => $product_title);
         }
         else {
             $messages[] = 'Categoría destino asignada exitosamente.';
@@ -224,14 +226,14 @@ function replace_product_category($product_id, $category_to_unlink, $category_to
     if ($is_unlink_category_present) {
         if (count($current_categories) < 2) {
             $messages[] = 'El producto solo tiene una categoría y no se puede desvincular.';
-            return array('success' => false, 'messages' => $messages);
+            return array('success' => false, 'messages' => $messages, 'product_title' => $product_title);
         }
         
         $unlink_result = unlink_product_from_category($product_id, $category_to_unlink);
         
         if (!$unlink_result) {
             $messages[] = 'Error al desvincular la categoría origen.';
-            return array('success' => false, 'messages' => $messages);
+            return array('success' => false, 'messages' => $messages, 'product_title' => $product_title);
         }
         
         $messages[] = 'Categoría origen desvinculada exitosamente.';
@@ -241,123 +243,123 @@ function replace_product_category($product_id, $category_to_unlink, $category_to
     $messages[] = 'Categorías finales: ' . implode(', ', $final_categories);
     $messages[] = 'Operación completada exitosamente.';
     
-    return array('success' => true, 'messages' => $messages);
+    return array('success' => true, 'messages' => $messages, 'product_title' => $product_title);
 }
 
 /**
- * Verifica la integridad de las relaciones de taxonomía y devuelve información diagnóstica.
+ * Procesa un lote de productos para cambiar su categoría con indicador de progreso.
  * 
- * @param int $category_id ID de la categoría a verificar.
- * @return array Información diagnóstica sobre la categoría.
+ * @param array $product_ids Lista de IDs de productos a procesar.
+ * @param int $category_to_unlink El ID de la categoría a desvincular.
+ * @param int $category_to_assign El ID de la categoría a asignar.
+ * @param bool $echo_progress Si es true, muestra el progreso en tiempo real.
+ * @return array Resultados del procesamiento por lotes.
  */
-function check_taxonomy_integrity($category_id) {
-    global $wpdb;
-    
-    $info = array(
-        'term_exists' => false,
-        'term_taxonomy_exists' => false,
-        'product_count' => 0,
-        'actual_product_count' => 0,
-        'issues' => array()
+function batch_replace_product_categories($product_ids, $category_to_unlink, $category_to_assign, $echo_progress = true) {
+    $results = array(
+        'total' => count($product_ids),
+        'processed' => 0,
+        'success' => 0,
+        'failed' => 0,
+        'skipped' => 0,
+        'details' => array()
     );
     
-    // Verificar que el término exista
-    $term = get_term($category_id, 'product_cat');
-    if ($term && !is_wp_error($term)) {
-        $info['term_exists'] = true;
-        $info['term_info'] = array(
-            'name' => $term->name,
-            'slug' => $term->slug,
-            'count' => $term->count
+    // Verificar que las categorías existan
+    if (!term_exists($category_to_unlink, 'product_cat') || !term_exists($category_to_assign, 'product_cat')) {
+        return array(
+            'success' => false,
+            'message' => 'Una o ambas categorías no existen',
+            'total' => 0,
+            'processed' => 0,
+            'success' => 0,
+            'failed' => 0,
+            'skipped' => 0
         );
-    } else {
-        $info['issues'][] = 'El término no existe en la base de datos';
     }
     
-    // Verificar la taxonomía
-    $term_taxonomy = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM $wpdb->term_taxonomy WHERE term_id = %d AND taxonomy = %s",
-        $category_id,
-        'product_cat'
-    ));
+    // Obtener nombres de categorías para mostrar en el progreso
+    $cat_from_name = get_term($category_to_unlink, 'product_cat')->name;
+    $cat_to_name = get_term($category_to_assign, 'product_cat')->name;
     
-    if ($term_taxonomy) {
-        $info['term_taxonomy_exists'] = true;
-        $info['product_count'] = $term_taxonomy->count;
-    } else {
-        $info['issues'][] = 'No existe entrada en term_taxonomy para esta categoría';
+    // Inicializar barra de progreso si se solicita
+    if ($echo_progress) {
+        echo '<div class="dcw-progress-container">';
+        echo '<div class="dcw-progress-bar" id="dcw-progress-bar" style="width: 0%;">0%</div>';
+        echo '</div>';
+        echo '<div id="dcw-current-operation">Iniciando proceso...</div>';
+        echo '<div id="dcw-status-messages"></div>';
+        
+        // Asegurar que la salida se envíe al navegador
+        if (ob_get_level() == 0) ob_start();
+        flush();
     }
     
-    // Contar relaciones reales en term_relationships
-    $actual_count = $wpdb->get_var($wpdb->prepare(
-        "SELECT COUNT(*) FROM $wpdb->term_relationships tr
-         JOIN $wpdb->term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
-         JOIN $wpdb->posts p ON tr.object_id = p.ID
-         WHERE tt.term_id = %d 
-         AND tt.taxonomy = %s
-         AND p.post_type = 'product'
-         AND p.post_status = 'publish'",
-        $category_id,
-        'product_cat'
-    ));
-    
-    $info['actual_product_count'] = (int) $actual_count;
-    
-    // Verificar si hay discrepancia en los conteos
-    if ($info['term_exists'] && $info['product_count'] != $info['actual_product_count']) {
-        $info['issues'][] = 'Discrepancia en el conteo de productos: ' . 
-                          'El contador de la taxonomía muestra ' . $info['product_count'] . 
-                          ' pero hay ' . $info['actual_product_count'] . ' productos reales';
+    foreach ($product_ids as $index => $product_id) {
+        $product_title = get_the_title($product_id);
+        $current_progress = round(($index / $results['total']) * 100);
+        
+        // Actualizar indicador de progreso
+        if ($echo_progress) {
+            echo '<script>
+                document.getElementById("dcw-progress-bar").style.width = "' . $current_progress . '%";
+                document.getElementById("dcw-progress-bar").innerHTML = "' . $current_progress . '%";
+                document.getElementById("dcw-current-operation").innerHTML = "Procesando: ' . esc_js($product_title) . ' (' . ($index + 1) . ' de ' . $results['total'] . ')";
+            </script>';
+            
+            // Forzar la salida al navegador
+            flush();
+        }
+        
+        // Procesar el producto
+        $replace_result = replace_product_category($product_id, $category_to_unlink, $category_to_assign);
+        $results['processed']++;
+        
+        if ($replace_result['success']) {
+            $results['success']++;
+            $status = 'completado';
+        } else {
+            // Determinar si fue un error o un salto (producto no estaba en la categoría origen)
+            $messages = implode(' ', $replace_result['messages']);
+            if (strpos($messages, 'no pertenece a la categoría origen') !== false) {
+                $results['skipped']++;
+                $status = 'saltado';
+            } else {
+                $results['failed']++;
+                $status = 'fallido';
+            }
+        }
+        
+        $results['details'][] = array(
+            'product_id' => $product_id,
+            'product_title' => $product_title,
+            'status' => $status,
+            'messages' => $replace_result['messages']
+        );
+        
+        // Mostrar mensaje de estado
+        if ($echo_progress) {
+            echo '<script>
+                var statusDiv = document.getElementById("dcw-status-messages");
+                statusDiv.innerHTML = "<p>• ' . esc_js($product_title) . ' - <span class=\'status-' . $status . '\'>' . $status . '</span></p>" + statusDiv.innerHTML;
+            </script>';
+            flush();
+        }
+        
+        // Pequeña pausa para evitar sobrecarga del servidor
+        usleep(100000); // 100ms
     }
     
-    return $info;
+    // Finalizar barra de progreso
+    if ($echo_progress) {
+        echo '<script>
+            document.getElementById("dcw-progress-bar").style.width = "100%";
+            document.getElementById("dcw-progress-bar").innerHTML = "100%";
+            document.getElementById("dcw-current-operation").innerHTML = "Proceso completado";
+        </script>';
+        flush();
+    }
+    
+    return $results;
 }
 
-/**
- * Reconstruye las relaciones de taxonomía para una categoría específica.
- * 
- * @param int $category_id ID de la categoría a reconstruir.
- * @return bool True si la reconstrucción fue exitosa.
- */
-function rebuild_category_relationships($category_id) {
-    global $wpdb;
-    
-    // Verificar que la categoría exista
-    $term = get_term($category_id, 'product_cat');
-    if (!$term || is_wp_error($term)) {
-        return false;
-    }
-    
-    // Obtener el term_taxonomy_id
-    $term_taxonomy_id = $wpdb->get_var($wpdb->prepare(
-        "SELECT term_taxonomy_id FROM $wpdb->term_taxonomy 
-         WHERE term_id = %d AND taxonomy = %s",
-        $category_id,
-        'product_cat'
-    ));
-    
-    if (!$term_taxonomy_id) {
-        return false;
-    }
-    
-    // Actualizar el contador en term_taxonomy
-    $count = $wpdb->get_var($wpdb->prepare(
-        "SELECT COUNT(*) FROM $wpdb->term_relationships tr
-         JOIN $wpdb->posts p ON tr.object_id = p.ID
-         WHERE tr.term_taxonomy_id = %d
-         AND p.post_type = 'product'
-         AND p.post_status = 'publish'",
-        $term_taxonomy_id
-    ));
-    
-    $wpdb->update(
-        $wpdb->term_taxonomy,
-        array('count' => $count),
-        array('term_taxonomy_id' => $term_taxonomy_id)
-    );
-    
-    // Limpiar caché
-    clean_term_cache($category_id, 'product_cat');
-    
-    return true;
-}
