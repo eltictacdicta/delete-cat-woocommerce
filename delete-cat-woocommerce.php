@@ -19,6 +19,16 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// Añadir al principio del archivo principal
+register_activation_hook(__FILE__, 'dcw_check_dependencies');
+
+function dcw_check_dependencies() {
+    if (!class_exists('WooCommerce')) {
+        deactivate_plugins(plugin_basename(__FILE__));
+        wp_die('Este plugin requiere WooCommerce. Por favor instala y activa WooCommerce primero.');
+    }
+}
+
 // Incluir funciones de lógica
 require_once plugin_dir_path(__FILE__) . 'includes/functions.php';
 
@@ -58,6 +68,13 @@ function display_category_id_form() {
                             <p class="description">Cantidad máxima de productos a procesar (entre 1 y 100).</p>
                         </td>
                     </tr>
+                    <tr>
+                        <th scope="row"><label for="process_all">Procesar Todos</label></th>
+                        <td>
+                            <input type="checkbox" name="process_all" id="process_all">
+                            <p class="description">Marca esta casilla para procesar todos los productos sin límite.</p>
+                        </td>
+                    </tr>
                 </table>
                 
                 <button type="button" id="start-batch-process" class="button button-primary">Procesar Productos en Lote</button>
@@ -95,7 +112,7 @@ function display_category_id_form() {
                     action: 'transfer_product_category',
                     category_url_origin: originUrl,
                     category_url_destination: destinationUrl,
-                    security: '<?php echo wp_create_nonce("transfer_category_nonce"); ?>'
+                    security: '<?php echo esc_js(wp_create_nonce("transfer_category_nonce")); ?>'
                 },
                 success: function(response) {
                     if(!response.success) {
@@ -127,47 +144,169 @@ function display_category_id_form() {
         // Función para procesar el lote
         function processBatch(originCategoryId, destinationCategoryId, batchSize) {
             var progressContainer = $('#batch-progress-container');
+            var processAll = $('#process_all').is(':checked');
             
-            // Iniciar el procesamiento por lotes
+            progressContainer.html(`
+                <div class="dcw-progress-container">
+                    <div class="dcw-progress-bar" id="dcw-progress-bar" style="width: 0%">0%</div>
+                </div>
+                <div id="dcw-current-operation" class="dcw-current-operation">Iniciando proceso...</div>
+                <div id="dcw-status-messages" class="dcw-status-messages"></div>
+            `);
+            
+            // Obtener la lista completa de IDs primero
             $.ajax({
                 type: 'POST',
                 url: ajaxurl,
                 dataType: 'json',
                 data: {
-                    action: 'batch_process_categories',
+                    action: 'get_product_ids',
                     category_id_origin: originCategoryId,
-                    category_id_destination: destinationCategoryId,
-                    batch_size: batchSize,
                     security: '<?php echo wp_create_nonce("batch_processing_nonce"); ?>'
                 },
                 success: function(response) {
                     if(response.success) {
-                        // Mostrar la barra de progreso y resultados
-                        progressContainer.html(response.data.progress_html);
+                        var productIds = response.data.product_ids;
+                        var totalProducts = Math.min(productIds.length, batchSize);
                         
-                        // Obtener los valores de los contadores con valores por defecto
-                        var successCount = response.data.success_count !== undefined ? response.data.success_count : 0;
-                        var skippedCount = response.data.skipped_count !== undefined ? response.data.skipped_count : 0;
-                        var failedCount = response.data.failed_count !== undefined ? response.data.failed_count : 0;
-                        var totalProcessed = response.data.total_processed !== undefined ? response.data.total_processed : 0;
+                        // Nueva variable para llevar el conteo
+                        let processedCount = 0;
                         
-                        // Añadir resumen de resultados
-                        progressContainer.append(
-                            '<div class="notice notice-success">' +
-                            '<p><strong>Resultados:</strong></p>' +
-                            '<p>✓ Procesados con éxito: ' + successCount + '</p>' +
-                            '<p>⚠ Saltados: ' + skippedCount + '</p>' +
-                            '<p>✗ Fallidos: ' + failedCount + '</p>' +
-                            '<p><strong>Total procesado: ' + totalProcessed + '</strong></p>' +
+                        // Función recursiva para procesamiento secuencial
+                        function processNextProduct(index) {
+                            if(index >= totalProducts || index >= productIds.length) {
+                                $('#dcw-progress-bar').css('width', '100%').text('100%');
+                                $('#dcw-current-operation').html('Proceso completado');
+                                return;
+                            }
+                            
+                            // Actualizar operación actual CON el índice correcto
+                            $('#dcw-current-operation').html('Procesando producto ' + (index + 1) + ' de ' + totalProducts);
+                            
+                            // Agregar timeout para evitar bloqueos
+                            $.ajax({
+                                type: 'POST',
+                                url: ajaxurl,
+                                dataType: 'json',
+                                timeout: 30000, // 30 segundos de timeout
+                                data: {
+                                    action: 'process_single_product',
+                                    product_id: productIds[index],
+                                    category_id_origin: originCategoryId,
+                                    category_id_destination: destinationCategoryId,
+                                    security: '<?php echo wp_create_nonce("batch_processing_nonce"); ?>'
+                                },
+                                success: function(response) {
+                                    // wp_send_json_success envuelve la respuesta en 'data'
+                                    // La respuesta de éxito real está en response.data
+                                    if(response && response.success && response.data) {
+                                        const processedCount = index + 1;
+                                        const totalProducts = Math.min(productIds.length, batchSize);
+                                        const progress = Math.round((processedCount / totalProducts) * 100);
+                                        $('#dcw-progress-bar').css('width', progress + '%').text(progress + '%');
+                                        
+                                        // Mostrar TODOS los mensajes del producto que vienen en response.data.messages
+                                        const messagesHtml = Array.isArray(response.data.messages) ? response.data.messages.join('<br>') : '<p>No hay mensajes detallados disponibles.</p>';
+                                        const productTitle = response.data.product_title || 'Producto desconocido';
+                                        const productId = productIds[index]; // Usar el ID del producto actual
+                                        
+                                        $('#dcw-status-messages').prepend(`
+                                            <div class="notice notice-success">
+                                                <h4>${productTitle} (ID: ${productId})</h4>
+                                                <div class="product-details">${messagesHtml}</div>
+                                            </div>`
+                                        );
+                                        
+                                        // Procesar siguiente producto inmediatamente
+                                        processNextProduct(index + 1);
+
+                                    } else {
+                                        // Esto manejaría casos donde response.success es false pero la estructura es inesperada
+                                        console.error('Respuesta AJAX inválida o incompleta en success handler:', response);
+                                        $('#dcw-status-messages').prepend(`
+                                            <div class="notice notice-error">
+                                                <h4>Error procesando producto ID: ${productIds[index]}</h4>
+                                                <p>Respuesta del servidor no exitosa o incompleta.</p>
+                                                 <pre>${JSON.stringify(response, null, 2).substring(0, 500)}...</pre> <!-- Mostrar respuesta parcial -->
+                                            </div>`
+                                        );
+                                        
+                                        // Continuar con el siguiente producto incluso si hay error
+                                         const processedCount = index + 1;
+                                         const totalProducts = Math.min(productIds.length, batchSize);
+                                         const progress = Math.round((processedCount / totalProducts) * 100);
+                                         $('#dcw-progress-bar').css('width', progress + '%').text(progress + '%');
+                                        processNextProduct(index + 1);
+                                    }
+                                },
+                                error: function(xhr, status, error) {
+                                    console.error('Error en AJAX para producto ' + productIds[index] + ':', status, error, xhr.responseText);
+                                    
+                                    let errorMessage = `Error: ${error || 'Desconocido'}`;
+                                    let errorDetails = xhr.responseText ? xhr.responseText.substring(0, 200) + '...' : 'Vacía';
+
+                                    // Intentar parsear la respuesta si es JSON
+                                    try {
+                                        const responseJson = JSON.parse(xhr.responseText);
+                                        if (responseJson.message) errorMessage = `Error: ${responseJson.message}`;
+                                        if (responseJson.details && Array.isArray(responseJson.details)) {
+                                            errorDetails = responseJson.details.join('<br>');
+                                        } else if (typeof responseJson.data === 'object' && responseJson.data.messages && Array.isArray(responseJson.data.messages)) {
+                                             // Manejar caso de wp_send_json_error
+                                             errorDetails = responseJson.data.messages.join('<br>');
+                                        } else {
+                                             errorDetails = xhr.responseText.substring(0, 200) + '...';
+                                        }
+                                    } catch (e) {
+                                        // No es JSON válido, usar texto crudo
+                                    }
+
+                                    $('#dcw-status-messages').prepend(`
+                                        <div class="notice notice-error">
+                                            <h4>Error procesando producto ID: ${productIds[index]}</h4>
+                                            <p>${errorMessage}</p>
+                                            <div class="product-details">${errorDetails}</div>
+                                        </div>`
+                                    );
+                                    
+                                    // Actualizar progreso incluso si hay error AJAX completo
+                                    const processedCount = index + 1;
+                                    const totalProducts = Math.min(productIds.length, batchSize);
+                                    const progress = Math.round((processedCount / totalProducts) * 100);
+                                    $('#dcw-progress-bar').css('width', progress + '%').text(progress + '%');
+
+                                    // Continuar con el siguiente producto incluso si hay error
+                                    processNextProduct(index + 1);
+                                }
+                            });
+                        }
+                        
+                        // Iniciar procesamiento
+                        if(totalProducts > 0) {
+                            processNextProduct(0);
+                        } else {
+                            // Actualizar todos los elementos de UI
+                            $('#dcw-progress-bar').css('width', '100%').text('100%');
+                            $('#dcw-current-operation').html('Proceso completado');
+                            $('#dcw-status-messages').html(
+                                '<div class="notice notice-success">' +
+                                    '<p>✅ Todos los productos han sido procesados</p>' +
+                                    '<p>No se encontraron más productos en la categoría de origen</p>' +
+                                '</div>'
+                            );
+                        }
+                    } else {
+                        // Mostrar mensaje predeterminado si no viene en la respuesta
+                        var errorMessage = 'Error: ' + (response.message || 'Desconocido');
+                        var details = response.details ? response.details.join('<br>') : '';
+                        
+                        $('#dcw-status-messages').html(
+                            '<div class="notice notice-error">' +
+                                '<p>' + errorMessage + '</p>' +
+                                (details ? '<div class="error-details">' + details + '</div>' : '') +
                             '</div>'
                         );
-                    } else {
-                        var errorMessage = response.data && response.data.message ? response.data.message : 'Error durante el procesamiento.';
-                        progressContainer.html('<div class="notice notice-error"><p>' + errorMessage + '</p></div>');
                     }
-                },
-                error: function() {
-                    progressContainer.html('<div class="notice notice-error"><p>Error durante el procesamiento por lotes.</p></div>');
                 }
             });
         }
@@ -194,6 +333,10 @@ add_action('admin_menu', 'add_category_id_form_to_admin_menu');
 add_action('wp_ajax_transfer_product_category', 'handle_ajax_transfer_product_category');
 
 function handle_ajax_transfer_product_category() {
+    if (!defined('DOING_AJAX') || !DOING_AJAX) {
+        wp_die('Acceso no permitido');
+    }
+    
     check_ajax_referer('transfer_category_nonce', 'security');
     
     // Limpiar cualquier output previo
@@ -331,4 +474,8 @@ function handle_ajax_batch_processing() {
     
     wp_send_json_success($response);
 }
+add_action('wp_ajax_batch_process_categories', 'handle_ajax_batch_processing');
+
+// Mantener solo los hooks AJAX principales
+add_action('wp_ajax_transfer_product_category', 'handle_ajax_transfer_product_category');
 add_action('wp_ajax_batch_process_categories', 'handle_ajax_batch_processing');

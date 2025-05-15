@@ -67,16 +67,90 @@
 /* Estilos para el formulario */
 .dcw-form-section {
     background: #fff;
-    padding: 20px;
-    margin-bottom: 20px;
+    padding: 30px;
+    margin: 20px auto;
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    max-width: 1200px;
+    width: 95vw;
+    box-sizing: border-box;
+    transition: all 0.3s ease;
 }
 
 .dcw-form-section h2 {
     margin-top: 0;
+    border-bottom: 2px solid #f0f0f0;
+    padding-bottom: 15px;
+    font-size: 1.5em;
+}
+
+.dcw-form-section .form-table {
+    width: 100%;
+    table-layout: fixed;
+    margin: 15px 0;
+}
+
+.dcw-form-section th {
+    width: 100% !important;
+    display: block;
+    padding: 0 0 5px 0;
+    text-align: left;
+}
+
+.dcw-form-section td {
+    width: 100% !important;
+    display: block;
+    padding: 0 0 15px 0;
+}
+
+.dcw-form-section tr {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 20px;
     border-bottom: 1px solid #eee;
     padding-bottom: 10px;
+}
+
+.dcw-form-section input[type="url"],
+.dcw-form-section input[type="number"] {
+    width: 100% !important;
+    max-width: 950px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.07);
+    transition: border-color 0.3s ease;
+}
+
+.dcw-form-section input[type="url"]:focus,
+.dcw-form-section input[type="number"]:focus {
+    border-color: #007cba;
+    box-shadow: 0 0 0 1px #007cba;
+}
+
+/* Responsive para pantallas grandes */
+@media screen and (min-width: 1600px) {
+    .dcw-form-section {
+        width: 1400px;
+        padding: 40px;
+    }
+    
+    .dcw-form-section th {
+        min-width: auto;
+    }
+}
+
+/* Mejoras para checkboxes */
+.dcw-form-section input[type="checkbox"] {
+    margin-top: 2px;
+}
+
+.dcw-form-section .description {
+    display: block;
+    margin-top: 8px;
+    color: #666;
+    font-size: 13px;
+    line-height: 1.5;
 }
 
 #dcw-batch-size {
@@ -88,4 +162,36 @@
     color: #666;
     margin-top: 5px;
     font-size: 13px;
+}
+
+/* Estilos para mejorar la presentación */
+.dcw-status-messages .notice {
+    margin: 10px 0;
+    padding: 15px;
+    border-left: 4px solid;
+}
+
+.dcw-status-messages h4 {
+    margin: 0 0 10px 0;
+    color: #1d2327;
+    font-size: 14px;
+}
+
+.product-details {
+    background: #f8f9fa;
+    padding: 10px;
+    margin: 10px 0;
+    border-radius: 3px;
+}
+
+.product-details br {
+    margin-bottom: 8px;
+    display: block;
+    content: "";
+}
+
+.dcw-current-operation {
+    margin: 15px 0;
+    font-weight: 500;
+    color: #2c3338;
 } 

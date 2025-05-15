@@ -37,19 +37,17 @@ function get_category_id_from_url($category_url) {
  * @return array|false Array de productos si se encuentra la categoría, o false si no.
  */
 function get_products_by_category_id($category_id) {
-    $output = []; // Almacenar mensajes aquí
+    $output = [];
     
-    if (!$category_id) {
-        $output[] = '<div class="notice notice-error"><p>ID de categoría inválido</p></div>';
-        return false;
+    // Validación adicional de la categoría
+    if (!term_exists($category_id, 'product_cat')) {
+        $output[] = '<div class="notice notice-error"><p>La categoría ID ' . $category_id . ' no existe</p></div>';
+        return ['products' => false, 'output' => $output];
     }
 
-    // Limpiar caché
-    clean_term_cache(array($category_id), 'product_cat');
-    wp_cache_flush();
-
     $args = array(
-        'post_type' => 'product',
+        'post_type' => array('product', 'product_variation'),
+        'post_status' => 'any',
         'posts_per_page' => -1,
         'tax_query' => array(
             array(
@@ -65,10 +63,10 @@ function get_products_by_category_id($category_id) {
     
     if (!$products_query->have_posts()) {
         $output[] = '<div class="notice notice-warning"><p>No se encontraron productos en la categoría ID: ' . esc_html($category_id) . '</p></div>';
-        return ['products' => false, 'output' => $output];
+        return ['products' => [], 'output' => $output];
     }
 
-    $products = array();
+    $products = array('products' => array(), 'output' => array());
     while ($products_query->have_posts()) {
         $products_query->the_post();
         $product_id = get_the_ID();
@@ -76,7 +74,7 @@ function get_products_by_category_id($category_id) {
         $actual_categories = wp_get_post_terms($product_id, 'product_cat', array('fields' => 'ids'));
         
         if (in_array($category_id, $actual_categories)) {
-            $products[] = array(
+            $products['products'][] = array(
                 'id' => $product_id,
                 'title' => get_the_title(),
             );
@@ -84,7 +82,7 @@ function get_products_by_category_id($category_id) {
     }
     wp_reset_postdata();
     
-    return ['products' => $products, 'output' => $output];
+    return ['products' => $products['products'], 'output' => $products['output']];
 }
 
 /**
@@ -176,9 +174,26 @@ function get_product_category_ids($product_id) {
 function replace_product_category($product_id, $category_to_unlink, $category_to_assign) {
     $messages = array();
     $product_title = get_the_title($product_id);
+    $product = wc_get_product($product_id);
     
+    // Obtener información completa del producto
+    $product_data = [
+        'title' => $product->get_name(),
+        'sku' => $product->get_sku(),
+        'type' => $product->get_type(),
+        'permalink' => get_permalink($product_id)
+    ];
+    
+    // Obtener información de categorías con validación
+    $category_from = get_term($category_to_unlink, 'product_cat');
+    $category_to = get_term($category_to_assign, 'product_cat');
+    
+    // Construir URLs usando la función nativa de WordPress
+    $url_origen = $category_from ? get_term_link($category_from) : 'Categoría no existe';
+    $url_destino = $category_to ? get_term_link($category_to) : 'Categoría no existe';
+
     // Verificar que el producto y las categorías existan
-    if (!get_post($product_id) || !term_exists($category_to_unlink, 'product_cat') || !term_exists($category_to_assign, 'product_cat')) {
+    if (!get_post($product_id) || !$category_from || !$category_to) {
         $messages[] = 'El producto o las categorías no existen.';
         return array('success' => false, 'messages' => $messages);
     }
@@ -241,9 +256,26 @@ function replace_product_category($product_id, $category_to_unlink, $category_to
 
     $final_categories = get_product_category_ids($product_id);
     $messages[] = 'Categorías finales: ' . implode(', ', $final_categories);
-    $messages[] = 'Operación completada exitosamente.';
+    $messages[] = 'Operación completada para: ' . $product_title;
+    $messages[] = '=== DATOS DEL PRODUCTO ===';
+    $messages[] = 'Nombre: ' . $product_data['title'];
+    $messages[] = 'SKU: ' . ($product_data['sku'] ?: 'N/A');
+    $messages[] = 'Tipo: ' . $product_data['type'];
+    $messages[] = 'URL producto: ' . esc_url($product_data['permalink']);
     
-    return array('success' => true, 'messages' => $messages, 'product_title' => $product_title);
+    $messages[] = '=== CATEGORÍAS ===';
+    $messages[] = 'Origen: ' . $category_from->name . ' | Slug: ' . $category_from->slug;
+    $messages[] = 'URL Origen: ' . (is_string($url_origen) ? esc_url($url_origen) : 'Error en URL');
+    $messages[] = 'Destino: ' . $category_to->name . ' | Slug: ' . $category_to->slug;
+    $messages[] = 'URL Destino: ' . (is_string($url_destino) ? esc_url($url_destino) : 'Error en URL');
+    
+    return array(
+        'success' => true, 
+        'messages' => $messages, 
+        'product_title' => $product_title,
+        'category_from' => $category_from,
+        'category_to' => $category_to
+    );
 }
 
 /**
@@ -295,59 +327,19 @@ function batch_replace_product_categories($product_ids, $category_to_unlink, $ca
         flush();
     }
     
-    foreach ($product_ids as $index => $product_id) {
-        $product_title = get_the_title($product_id);
-        $current_progress = round(($index / $results['total']) * 100);
-        
-        // Actualizar indicador de progreso
-        if ($echo_progress) {
-            echo '<script>
-                document.getElementById("dcw-progress-bar").style.width = "' . $current_progress . '%";
-                document.getElementById("dcw-progress-bar").innerHTML = "' . $current_progress . '%";
-                document.getElementById("dcw-current-operation").innerHTML = "Procesando: ' . esc_js($product_title) . ' (' . ($index + 1) . ' de ' . $results['total'] . ')";
-            </script>';
-            
-            // Forzar la salida al navegador
-            flush();
-        }
-        
-        // Procesar el producto
+    foreach ($product_ids as $product_id) {
         $replace_result = replace_product_category($product_id, $category_to_unlink, $category_to_assign);
         $results['processed']++;
         
+        // Actualizar resultados
         if ($replace_result['success']) {
             $results['success']++;
-            $status = 'completado';
         } else {
-            // Determinar si fue un error o un salto (producto no estaba en la categoría origen)
-            $messages = implode(' ', $replace_result['messages']);
-            if (strpos($messages, 'no pertenece a la categoría origen') !== false) {
-                $results['skipped']++;
-                $status = 'saltado';
-            } else {
-                $results['failed']++;
-                $status = 'fallido';
-            }
+            // Lógica de error/salto...
         }
         
-        $results['details'][] = array(
-            'product_id' => $product_id,
-            'product_title' => $product_title,
-            'status' => $status,
-            'messages' => $replace_result['messages']
-        );
-        
-        // Mostrar mensaje de estado
-        if ($echo_progress) {
-            echo '<script>
-                var statusDiv = document.getElementById("dcw-status-messages");
-                statusDiv.innerHTML = "<p>• ' . esc_js($product_title) . ' - <span class=\'status-' . $status . '\'>' . $status . '</span></p>" + statusDiv.innerHTML;
-            </script>';
-            flush();
-        }
-        
-        // Pequeña pausa para evitar sobrecarga del servidor
-        usleep(100000); // 100ms
+        // Eliminar la pausa para mejor rendimiento
+        // usleep(100000); 
     }
     
     // Finalizar barra de progreso
@@ -361,5 +353,115 @@ function batch_replace_product_categories($product_ids, $category_to_unlink, $ca
     }
     
     return $results;
+}
+
+add_action('wp_ajax_get_product_ids', 'handle_ajax_get_product_ids');
+add_action('wp_ajax_process_single_product', 'handle_ajax_process_single_product');
+
+function handle_ajax_get_product_ids() {
+    check_ajax_referer('batch_processing_nonce', 'security');
+    
+    $category_id = isset($_POST['category_id_origin']) ? intval($_POST['category_id_origin']) : 0;
+    
+    // Validación adicional antes de obtener productos
+    if ($category_id <= 0) {
+        wp_send_json_error(array(
+            'message' => 'ID de categoría inválido',
+            'details' => []
+        ));
+    }
+    
+    $products = get_products_by_category_id($category_id);
+    
+    if($products['products'] !== false) {
+        wp_send_json_success(array(
+            'product_ids' => array_column($products['products'], 'id'),
+            'debug_info' => $products['output']
+        ));
+    } else {
+        wp_send_json_error(array(
+            'message' => 'Error al obtener productos',
+            'details' => $products['output']
+        ));
+    }
+}
+
+function handle_ajax_process_single_product() {
+    check_ajax_referer('batch_processing_nonce', 'security');
+    
+    // Verificar permisos de nuevo, buena práctica
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => 'No tienes permisos para realizar esta acción.'));
+        return;
+    }
+    
+    $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+    $category_origin = isset($_POST['category_id_origin']) ? intval($_POST['category_id_origin']) : 0;
+    $category_destination = isset($_POST['category_id_destination']) ? intval($_POST['category_id_destination']) : 0;
+    
+    // Validar inputs
+    if ($product_id <= 0 || $category_origin <= 0 || $category_destination <= 0) {
+         // Usar wp_send_json_error para errores de validación
+         wp_send_json_error(array(
+            'message' => 'Error: IDs de producto o categoría inválidos.',
+            'product_title' => 'N/A', // Para que el JS no falle al mostrar el título
+            'messages' => ['IDs de producto o categoría inválidos.'],
+            'product_id' => $product_id // Añadir ID para depuración
+        ));
+        return; // Detener ejecución
+    }
+
+    // Forzar limpieza de caché
+    clean_post_cache($product_id);
+    wp_cache_flush();
+    
+    $result = array(
+        'success' => false, // Valor inicial por defecto
+        'messages' => array('Error desconocido en el servidor'),
+        'product_title' => get_the_title($product_id) ?: 'Producto desconocido' // Intentar obtener el título
+    );
+
+    try {
+        // Llamar a la función principal de reemplazo
+        $result = replace_product_category($product_id, $category_origin, $category_destination);
+        
+        // Asegurarse de que messages es un array
+        if (!isset($result['messages']) || !is_array($result['messages'])) {
+             $result['messages'] = array('replace_product_category no devolvió un array de mensajes válido.');
+             $result['success'] = false; // Marcar como fallo si los mensajes son inválidos
+        }
+
+    } catch (Exception $e) {
+        // Capturar cualquier excepción no manejada en replace_product_category
+        $result['messages'][] = 'Excepción PHP: ' . $e->getMessage();
+        $result['success'] = false; // Marcar como fallo si hubo excepción
+         // Registrar en el log de errores de PHP
+        error_log('DCW Plugin Error: Exception in handle_ajax_process_single_product for product ' . $product_id . ' - ' . $e->getMessage());
+    } catch (Error $e) {
+         // Capturar errores fatales en PHP 7+
+        $result['messages'][] = 'Error Fatal PHP: ' . $e->getMessage();
+        $result['success'] = false;
+        error_log('DCW Plugin Error: Fatal Error in handle_ajax_process_single_product for product ' . $product_id . ' - ' . $e->getMessage());
+    }
+
+    // Pequeña pausa para permitir actualización UI
+    usleep(50000); // 50ms
+    
+    // Usar wp_send_json_success o wp_send_json_error según el resultado
+    if ($result['success']) {
+         // wp_send_json_success envuelve $result en una clave 'data'
+         wp_send_json_success($result);
+    } else {
+         // wp_send_json_error envuelve $result en una clave 'data' y añade 'success: false'
+         // Aunque $result ya tiene 'success: false', wp_send_json_error lo garantiza
+         // Sin embargo, el JS error handler espera 'message' y 'details' en la raíz, no en 'data'
+         // Para compatibilidad con tu JS error handler existente, enviaremos una estructura compatible
+         wp_send_json(array(
+             'success' => false,
+             'message' => 'Error al procesar producto (ver detalles)',
+             'details' => $result['messages'], // Enviar mensajes como detalles
+             'product_id' => $product_id // Añadir ID para depuración
+         ));
+    }
 }
 
