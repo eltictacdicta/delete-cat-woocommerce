@@ -31,6 +31,7 @@ function dcw_check_dependencies() {
 
 // Incluir funciones de lógica
 require_once plugin_dir_path(__FILE__) . 'includes/functions.php';
+require_once plugin_dir_path(__FILE__) . 'includes/func-excel.php';
 
 /**
  * Muestra un formulario para ingresar la URL de una categoría y devuelve sus productos.
@@ -84,6 +85,41 @@ function display_category_id_form() {
                 </div>
             </form>
         </div>
+    </div>
+    
+    <div class="card dcw-form-section" style="margin-top: 20px;">
+        <h2>Importar desde Excel</h2>
+        <div style="margin-bottom: 15px;">
+            <a href="<?php echo admin_url('admin-ajax.php?action=dcw_download_template&nonce='.wp_create_nonce('dcw_template_nonce')); ?>" 
+               class="button button-secondary"
+               id="download-template">
+               📥 Descargar Plantilla Excel
+            </a>
+            <p class="description">Descarga un archivo de ejemplo con el formato requerido</p>
+        </div>
+        <form id="excel-import-form" method="post" enctype="multipart/form-data">
+            <table class="form-table">
+                <tr>
+                    <th><label>Archivo Excel</label></th>
+                    <td>
+                        <input type="file" name="dcw_excel" accept=".xlsx, .csv" required>
+                        <p class="description">Formato requerido: Columnas "Categoría Origen" y "Categoría Destino" (URLs o IDs)</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><label>Modo de procesamiento</label></th>
+                    <td>
+                        <select name="processing_mode">
+                            <option value="sequential">Secuencial (más lento pero seguro)</option>
+                            <option value="batch">Por lotes (más rápido)</option>
+                        </select>
+                    </td>
+                </tr>
+            </table>
+            <?php wp_nonce_field('dcw_excel_import', 'dcw_nonce'); ?>
+            <button type="submit" class="button button-primary">Procesar Excel</button>
+        </form>
+        <div id="excel-results" style="margin-top: 20px;"></div>
     </div>
     
     <script>
@@ -310,6 +346,61 @@ function display_category_id_form() {
                 }
             });
         }
+    });
+
+    // JavaScript para manejar la subida del Excel
+    jQuery(document).ready(function($) {
+        $('#excel-import-form').on('submit', function(e) {
+            e.preventDefault();
+            var formData = new FormData(this);
+            var resultsDiv = $('#excel-results');
+            
+            // Mostrar loader
+            resultsDiv.html('<div class="notice notice-info"><p>Procesando archivo Excel...</p></div>');
+
+            jQuery.ajax({
+                url: ajaxurl + '?action=dcw_process_excel',
+                type: 'POST',
+                data: formData,
+                contentType: false,
+                processData: false,
+                success: function(response) {
+                    if(response.success) {
+                        var successHtml = '<div class="notice notice-success">' +
+                            '<p>✅ Proceso completado correctamente</p>' +
+                            '<h4>Resultados detallados:</h4>';
+                        
+                        response.results.forEach(function(result, index) {
+                            if(result.success) {
+                                successHtml += `<div class="result-item success">
+                                    <p>Línea ${index + 1}: Procesada correctamente</p>
+                                </div>`;
+                            } else {
+                                successHtml += `<div class="notice notice-error">
+                                    <p>❌ Línea ${index + 1}: ${result.message}</p>
+                                </div>`;
+                            }
+                        });
+                        
+                        successHtml += '</div>';
+                        resultsDiv.html(successHtml);
+                    } else {
+                        resultsDiv.html('<div class="notice notice-error">' +
+                            `<p>Error: ${response.message}</p>` +
+                        '</div>');
+                    }
+                },
+                error: function(xhr) {
+                    var errorMessage = 'Error en la conexión. Código: ' + xhr.status;
+                    if(xhr.responseJSON && xhr.responseJSON.message) {
+                        errorMessage += '<br>' + xhr.responseJSON.message;
+                    }
+                    resultsDiv.html('<div class="notice notice-error">' +
+                        `<p>${errorMessage}</p>` +
+                    '</div>');
+                }
+            });
+        });
     });
     </script>
     <?php
