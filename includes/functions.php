@@ -247,11 +247,14 @@ function replace_product_category($product_id, $category_to_unlink, $category_to
         $unlink_result = unlink_product_from_category($product_id, $category_to_unlink);
         
         if (!$unlink_result) {
-            $messages[] = 'Error al desvincular la categoría origen.';
-            return array('success' => false, 'messages' => $messages, 'product_title' => $product_title);
+            $current_categories = get_product_category_ids($product_id);
+            $updated_categories = array_values(array_diff($current_categories, [$category_to_unlink]));
+            
+            if (!empty($updated_categories)) {
+                wp_set_object_terms($product_id, $updated_categories, 'product_cat');
+                $messages[] = 'Categoría origen desvinculada manualmente';
+            }
         }
-        
-        $messages[] = 'Categoría origen desvinculada exitosamente.';
     }
 
     $final_categories = get_product_category_ids($product_id);
@@ -285,9 +288,10 @@ function replace_product_category($product_id, $category_to_unlink, $category_to
  * @param int $category_to_unlink El ID de la categoría a desvincular.
  * @param int $category_to_assign El ID de la categoría a asignar.
  * @param bool $echo_progress Si es true, muestra el progreso en tiempo real.
+ * @param int $batch_size Tamaño del lote para procesamiento. Por defecto 50.
  * @return array Resultados del procesamiento por lotes.
  */
-function batch_replace_product_categories($product_ids, $category_to_unlink, $category_to_assign, $echo_progress = true) {
+function batch_replace_product_categories($product_ids, $category_to_unlink, $category_to_assign, $echo_progress = true, $batch_size = 50) {
     $results = array(
         'total' => count($product_ids),
         'processed' => 0,
@@ -301,7 +305,7 @@ function batch_replace_product_categories($product_ids, $category_to_unlink, $ca
     if (!term_exists($category_to_unlink, 'product_cat') || !term_exists($category_to_assign, 'product_cat')) {
         return array(
             'success' => false,
-            'message' => 'Una o ambas categorías no existen',
+            'message' => __('Una o ambas categorías no existen', 'delete-categories-woocommerce'),
             'total' => 0,
             'processed' => 0,
             'success' => 0,
@@ -311,15 +315,18 @@ function batch_replace_product_categories($product_ids, $category_to_unlink, $ca
     }
     
     // Obtener nombres de categorías para mostrar en el progreso
-    $cat_from_name = get_term($category_to_unlink, 'product_cat')->name;
-    $cat_to_name = get_term($category_to_assign, 'product_cat')->name;
+    $cat_from = get_term($category_to_unlink, 'product_cat');
+    $cat_to = get_term($category_to_assign, 'product_cat');
+    
+    $cat_from_name = $cat_from ? $cat_from->name : __('Desconocida', 'delete-categories-woocommerce');
+    $cat_to_name = $cat_to ? $cat_to->name : __('Desconocida', 'delete-categories-woocommerce');
     
     // Inicializar barra de progreso si se solicita
     if ($echo_progress) {
         echo '<div class="dcw-progress-container">';
         echo '<div class="dcw-progress-bar" id="dcw-progress-bar" style="width: 0%;">0%</div>';
         echo '</div>';
-        echo '<div id="dcw-current-operation">Iniciando proceso...</div>';
+        echo '<div id="dcw-current-operation">' . __('Iniciando proceso...', 'delete-categories-woocommerce') . '</div>';
         echo '<div id="dcw-status-messages"></div>';
         
         // Asegurar que la salida se envíe al navegador
@@ -327,19 +334,88 @@ function batch_replace_product_categories($product_ids, $category_to_unlink, $ca
         flush();
     }
     
-    foreach ($product_ids as $product_id) {
-        $replace_result = replace_product_category($product_id, $category_to_unlink, $category_to_assign);
-        $results['processed']++;
+    // Dividir los productos en lotes para mejor rendimiento
+    $total_products = count($product_ids);
+    $batches = array_chunk($product_ids, $batch_size);
+    $batch_count = count($batches);
+    
+    foreach ($batches as $batch_index => $batch) {
+        // Realizar la transacción por lotes para mejor rendimiento
+        global $wpdb;
+        $wpdb->query('START TRANSACTION');
         
-        // Actualizar resultados
-        if ($replace_result['success']) {
-            $results['success']++;
-        } else {
-            // Lógica de error/salto...
+        try {
+            foreach ($batch as $product_id) {
+                $replace_result = replace_product_category($product_id, $category_to_unlink, $category_to_assign);
+                $results['processed']++;
+                
+                // Actualizar resultados
+                if ($replace_result['success']) {
+                    $results['success']++;
+                    $results['details'][] = array(
+                        'id' => $product_id,
+                        'status' => 'success',
+                        'title' => isset($replace_result['product_title']) ? $replace_result['product_title'] : __('Producto', 'delete-categories-woocommerce') . ' #' . $product_id
+                    );
+                } else {
+                    if (isset($replace_result['skipped']) && $replace_result['skipped']) {
+                        $results['skipped']++;
+                        $results['details'][] = array(
+                            'id' => $product_id,
+                            'status' => 'skipped',
+                            'title' => isset($replace_result['product_title']) ? $replace_result['product_title'] : __('Producto', 'delete-categories-woocommerce') . ' #' . $product_id,
+                            'messages' => isset($replace_result['messages']) ? $replace_result['messages'] : []
+                        );
+                    } else {
+                        $results['failed']++;
+                        $results['details'][] = array(
+                            'id' => $product_id,
+                            'status' => 'failed',
+                            'title' => isset($replace_result['product_title']) ? $replace_result['product_title'] : __('Producto', 'delete-categories-woocommerce') . ' #' . $product_id,
+                            'messages' => isset($replace_result['messages']) ? $replace_result['messages'] : []
+                        );
+                    }
+                }
+                
+                // Actualizar la barra de progreso cada 5 productos o al finalizar
+                if ($echo_progress && ($results['processed'] % 5 === 0 || $results['processed'] === $total_products)) {
+                    $progress = round(($results['processed'] / $total_products) * 100);
+                    echo '<script>
+                        document.getElementById("dcw-progress-bar").style.width = "' . $progress . '%";
+                        document.getElementById("dcw-progress-bar").innerHTML = "' . $progress . '%";
+                        document.getElementById("dcw-current-operation").innerHTML = "' . 
+                            sprintf(__('Procesando lote %d de %d - Producto %d de %d', 'delete-categories-woocommerce'), 
+                                $batch_index + 1, $batch_count, $results['processed'], $total_products) . '";
+                    </script>';
+                    
+                    // Forzar actualización
+                    flush();
+                }
+            }
+            
+            // Si todo va bien, confirmar la transacción
+            $wpdb->query('COMMIT');
+            
+            // Limpiar caché después de cada lote
+            clean_term_cache(array($category_to_unlink, $category_to_assign), 'product_cat');
+            clean_post_cache($batch);
+            
+        } catch (Exception $e) {
+            // Si hay errores, revertir los cambios
+            $wpdb->query('ROLLBACK');
+            
+            if ($echo_progress) {
+                echo '<div class="notice notice-error"><p>' . 
+                    sprintf(__('Error en el lote %d: %s', 'delete-categories-woocommerce'), $batch_index + 1, $e->getMessage()) . 
+                '</p></div>';
+                flush();
+            }
         }
         
-        // Eliminar la pausa para mejor rendimiento
-        // usleep(100000); 
+        // Pequeña pausa entre lotes para evitar sobrecarga del servidor
+        if ($batch_count > 1 && $batch_index < $batch_count - 1) {
+            usleep(500000); // 0.5 segundos
+        }
     }
     
     // Finalizar barra de progreso
@@ -347,11 +423,72 @@ function batch_replace_product_categories($product_ids, $category_to_unlink, $ca
         echo '<script>
             document.getElementById("dcw-progress-bar").style.width = "100%";
             document.getElementById("dcw-progress-bar").innerHTML = "100%";
-            document.getElementById("dcw-current-operation").innerHTML = "Proceso completado";
+            document.getElementById("dcw-current-operation").innerHTML = "' . __('Proceso completado', 'delete-categories-woocommerce') . '";
         </script>';
+        
+        // Mostrar resumen
+        echo '<div class="notice notice-success"><p>' . 
+            sprintf(
+                __('Proceso completado: %d productos procesados. %d exitosos, %d fallidos, %d omitidos.', 'delete-categories-woocommerce'),
+                $results['processed'], $results['success'], $results['failed'], $results['skipped']
+            ) . 
+        '</p></div>';
         flush();
     }
     
     return $results;
 }
+
+/**
+ * Procesa un producto individual, moviendo de una categoría a otra.
+ * Este handler es llamado por AJAX para procesar cada producto.
+ */
+function handle_ajax_process_single_product() {
+    // Verificar el nonce por seguridad
+    check_ajax_referer('batch_processing_nonce', 'security');
+    
+    // Verificar permisos
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error([
+            'message' => 'No tienes permisos para realizar esta acción.'
+        ]);
+    }
+    
+    // Obtener los parámetros
+    $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+    $category_id_origin = isset($_POST['category_id_origin']) ? intval($_POST['category_id_origin']) : 0;
+    $category_id_destination = isset($_POST['category_id_destination']) ? intval($_POST['category_id_destination']) : 0;
+    
+    // Validar datos
+    if (!$product_id || !$category_id_origin || !$category_id_destination) {
+        wp_send_json_error([
+            'message' => 'Faltan parámetros requeridos',
+            'data' => [
+                'messages' => ['El ID del producto o de las categorías es inválido']
+            ]
+        ]);
+    }
+    
+    // Procesar el producto
+    $result = replace_product_category($product_id, $category_id_origin, $category_id_destination);
+    
+    if ($result['success']) {
+        wp_send_json_success([
+            'success' => true,
+            'product_title' => $result['product_title'],
+            'messages' => $result['messages']
+        ]);
+    } else {
+        wp_send_json_error([
+            'message' => 'Error al procesar el producto',
+            'data' => [
+                'product_id' => $product_id,
+                'messages' => $result['messages']
+            ]
+        ]);
+    }
+}
+
+// Registrar el handler AJAX para procesar productos individuales
+add_action('wp_ajax_process_single_product', 'handle_ajax_process_single_product');
 
