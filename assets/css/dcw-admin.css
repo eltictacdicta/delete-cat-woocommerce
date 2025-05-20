@@ -194,4 +194,47 @@
     margin: 15px 0;
     font-weight: 500;
     color: #2c3338;
+}
+
+/* Estilos para el registro de operaciones */
+.dcw-log-container {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #e5e5e5;
+    background-color: #f9f9f9;
+    padding: 10px;
+    margin-top: 15px;
+    border-radius: 4px;
+}
+
+.log-entry {
+    padding: 5px 0;
+    border-bottom: 1px solid #eee;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+/* Estilos específicos para la sección de eliminar productos */
+#delete-category-results .notice {
+    margin: 15px 0;
+    padding: 15px;
+}
+
+#delete-category-results h4 {
+    margin: 15px 0 10px 0;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+#delete-category-results ul {
+    margin-left: 20px;
+    list-style-type: disc;
+}
+
+#delete-category-results li {
+    margin-bottom: 5px;
 } 

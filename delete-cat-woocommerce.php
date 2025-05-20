@@ -45,6 +45,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/transfer-products.php';
 require_once plugin_dir_path(__FILE__) . 'includes/func-excel.php';
 require_once plugin_dir_path(__FILE__) . 'includes/delete-empty-categories.php';
 require_once plugin_dir_path(__FILE__) . 'includes/delete-empty-logic.php';
+require_once plugin_dir_path(__FILE__) . 'includes/delete-category-products.php';
 
 /**
  * Muestra un formulario para ingresar la URL de una categoría y devuelve sus productos.
@@ -106,41 +107,58 @@ function display_category_id_form() {
             <div id="delete-results" style="margin-top: 10px;"></div>
         </div>
 
-    </div>
-    
-    <div class="card dcw-form-section" style="margin-top: 20px;">
-        <h2><?php _e('Importar desde Excel', 'delete-categories-woocommerce'); ?></h2>
-        <div style="margin-bottom: 15px;">
-            <a href="<?php echo admin_url('admin-ajax.php?action=dcw_download_template&nonce='.wp_create_nonce('dcw_template_nonce')); ?>" 
-               class="button button-secondary"
-               id="download-template">
-               📥 <?php _e('Descargar Plantilla Excel', 'delete-categories-woocommerce'); ?>
-            </a>
-            <p class="description"><?php _e('Descarga un archivo de ejemplo con el formato requerido', 'delete-categories-woocommerce'); ?></p>
+        <div class="card dcw-form-section" style="margin-top: 20px;">
+            <h2><?php _e('Eliminar Productos de una Categoría', 'delete-categories-woocommerce'); ?></h2>
+            <p><?php _e('Esta opción te permite eliminar todos los productos de una categoría específica. Los productos que solo pertenecen a esta categoría serán eliminados completamente. Los productos que también pertenecen a otras categorías serán desvinculados de esta categoría.', 'delete-categories-woocommerce'); ?></p>
+            <form id="delete-category-products-form" method="post">
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="delete_category_url"><?php _e('URL de la Categoría', 'delete-categories-woocommerce'); ?></label></th>
+                        <td>
+                            <input type="url" name="delete_category_url" id="delete_category_url" class="regular-text" required placeholder="https://tutienda.com/product-categoria/categoria-a-eliminar/">
+                            <p class="description"><?php _e('Ingresa la URL completa de la categoría de la que deseas eliminar productos.', 'delete-categories-woocommerce'); ?></p>
+                        </td>
+                    </tr>
+                </table>
+                <button type="button" id="delete-category-products-btn" class="button button-primary"><?php _e('Eliminar Productos de Categoría', 'delete-categories-woocommerce'); ?></button>
+                <div id="delete-category-results" style="margin-top: 20px;"></div>
+            </form>
         </div>
-        <form id="excel-import-form" method="post" enctype="multipart/form-data">
-            <table class="form-table">
-                <tr>
-                    <th><label><?php _e('Archivo Excel', 'delete-categories-woocommerce'); ?></label></th>
-                    <td>
-                        <input type="file" name="dcw_excel" accept=".xlsx, .csv" required>
-                        <p class="description"><?php _e('Formato requerido: Columnas "Categoría Origen" y "Categoría Destino" (URLs o IDs)', 'delete-categories-woocommerce'); ?></p>
-                    </td>
-                </tr>
-                <tr>
-                    <th><label><?php _e('Modo de procesamiento', 'delete-categories-woocommerce'); ?></label></th>
-                    <td>
-                        <select name="processing_mode">
-                            <option value="sequential"><?php _e('Secuencial (más lento pero seguro)', 'delete-categories-woocommerce'); ?></option>
-                            <option value="batch"><?php _e('Por lotes (más rápido)', 'delete-categories-woocommerce'); ?></option>
-                        </select>
-                    </td>
-                </tr>
-            </table>
-            <?php wp_nonce_field('dcw_excel_import', 'dcw_nonce'); ?>
-            <button type="submit" class="button button-primary"><?php _e('Procesar Excel', 'delete-categories-woocommerce'); ?></button>
-        </form>
-        <div id="excel-results" style="margin-top: 20px;"></div>
+        
+        <div class="card dcw-form-section" style="margin-top: 20px;">
+            <h2><?php _e('Importar desde Excel', 'delete-categories-woocommerce'); ?></h2>
+            <div style="margin-bottom: 15px;">
+                <a href="<?php echo admin_url('admin-ajax.php?action=dcw_download_template&nonce='.wp_create_nonce('dcw_template_nonce')); ?>" 
+                   class="button button-secondary"
+                   id="download-template">
+                   📥 <?php _e('Descargar Plantilla Excel', 'delete-categories-woocommerce'); ?>
+                </a>
+                <p class="description"><?php _e('Descarga un archivo de ejemplo con el formato requerido', 'delete-categories-woocommerce'); ?></p>
+            </div>
+            <form id="excel-import-form" method="post" enctype="multipart/form-data">
+                <table class="form-table">
+                    <tr>
+                        <th><label><?php _e('Archivo Excel', 'delete-categories-woocommerce'); ?></label></th>
+                        <td>
+                            <input type="file" name="dcw_excel" accept=".xlsx, .csv" required>
+                            <p class="description"><?php _e('Formato requerido: Columnas "Categoría Origen" y "Categoría Destino" (URLs o IDs)', 'delete-categories-woocommerce'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><label><?php _e('Modo de procesamiento', 'delete-categories-woocommerce'); ?></label></th>
+                        <td>
+                            <select name="processing_mode">
+                                <option value="sequential"><?php _e('Secuencial (más lento pero seguro)', 'delete-categories-woocommerce'); ?></option>
+                                <option value="batch"><?php _e('Por lotes (más rápido)', 'delete-categories-woocommerce'); ?></option>
+                            </select>
+                        </td>
+                    </tr>
+                </table>
+                <?php wp_nonce_field('dcw_excel_import', 'dcw_nonce'); ?>
+                <button type="submit" class="button button-primary"><?php _e('Procesar Excel', 'delete-categories-woocommerce'); ?></button>
+            </form>
+            <div id="excel-results" style="margin-top: 20px;"></div>
+        </div>
     </div>
     <?php
 }
@@ -187,9 +205,10 @@ function dcw_enqueue_admin_styles() {
             'nonces' => array(
                 'transfer' => wp_create_nonce("transfer_category_nonce"),
                 'batch' => wp_create_nonce("batch_processing_nonce"),
-                'delete' => wp_create_nonce("delete_empty_cats_nonce")
+                'delete' => wp_create_nonce("delete_empty_cats_nonce"),
+                'delete_products' => wp_create_nonce("delete_category_products_nonce")
             ),
-            'confirmDelete' => __('¿Estás seguro de que quieres eliminar todas las categorías de producto vacías y sin subcategorías? ¡Esta acción no se puede deshacer!', 'text-domain')
+            'confirmDelete' => __('¿Estás seguro de que quieres eliminar todas las categorías de producto vacías y sin subcategorías? ¡Esta acción no se puede deshacer!', 'delete-categories-woocommerce')
         ));
     }
 }
@@ -198,6 +217,7 @@ add_action('admin_enqueue_scripts', 'dcw_enqueue_admin_styles');
 // Mantener solo los hooks esenciales al final del archivo:
 add_action('wp_ajax_delete_empty_product_categories', 'handle_ajax_delete_empty_product_categories');
 add_action('wp_ajax_get_product_ids', 'handle_ajax_get_product_ids');
+add_action('wp_ajax_delete_category_products', 'handle_ajax_delete_category_products');
 
 // Agregar esta nueva función
 function handle_ajax_get_product_ids() {

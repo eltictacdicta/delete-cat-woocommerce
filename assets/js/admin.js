@@ -151,10 +151,77 @@ jQuery(document).ready(function($) {
         });
     };
 
+    // Nueva función para eliminar productos de una categoría
+    const dcwDeleteCategoryProducts = function() {
+        const categoryUrl = $('#delete_category_url').val();
+        const resultsDiv = $('#delete-category-results');
+        
+        if(!categoryUrl) {
+            resultsDiv.html('<div class="notice notice-error"><p>Por favor, ingresa la URL de la categoría.</p></div>');
+            return;
+        }
+
+        // Mostrar confirmación
+        if(!confirm('¿Estás seguro de que deseas eliminar los productos de esta categoría? Esta acción no se puede deshacer.')) {
+            return;
+        }
+
+        resultsDiv.html('<div class="notice notice-info"><p>Procesando solicitud...</p></div>');
+
+        $.ajax({
+            type: 'POST',
+            url: dcwData.ajaxurl,
+            dataType: 'json',
+            data: {
+                action: 'delete_category_products',
+                category_url: categoryUrl,
+                security: dcwData.nonces.delete_products
+            },
+            success: function(response) {
+                if(response.success) {
+                    let statsHtml = '';
+                    if(response.data.stats) {
+                        statsHtml = `
+                            <h4>Estadísticas:</h4>
+                            <ul>
+                                <li>Total de productos procesados: ${response.data.stats.total}</li>
+                                <li>Productos eliminados completamente: ${response.data.stats.deleted}</li>
+                                <li>Productos desvinculados de la categoría: ${response.data.stats.unlinked}</li>
+                                <li>Productos con categoría principal cambiada: ${response.data.stats.changed_primary}</li>
+                                <li>Errores: ${response.data.stats.errors}</li>
+                            </ul>
+                        `;
+                    }
+                    
+                    let logHtml = '';
+                    if(response.data.log && response.data.log.length > 0) {
+                        logHtml = '<h4>Registro de operaciones:</h4><div class="dcw-log-container">';
+                        response.data.log.forEach(logEntry => {
+                            logHtml += `<div class="log-entry">${logEntry}</div>`;
+                        });
+                        logHtml += '</div>';
+                    }
+                    
+                    resultsDiv.html(`
+                        <div class="notice notice-success">
+                            <p>${response.data.message}</p>
+                            ${statsHtml}
+                            ${logHtml}
+                        </div>
+                    `);
+                } else {
+                    resultsDiv.html(`<div class="notice notice-error"><p>${response.data.message || 'Error al procesar la solicitud'}</p></div>`);
+                }
+            },
+            error: () => resultsDiv.html('<div class="notice notice-error"><p>Error al procesar la solicitud AJAX.</p></div>')
+        });
+    };
+
     // Luego asigna los event handlers
     $('#start-batch-process').on('click', dcwBatchProcessing);
     $('#delete-empty-categories').on('click', dcwDeleteEmptyCategories);
     $('#excel-import-form').on('submit', dcwProcessExcel);
+    $('#delete-category-products-btn').on('click', dcwDeleteCategoryProducts);
 
     // Función auxiliar para procesamiento por lotes
     const processBatch = function(originCategoryId, destinationCategoryId, batchSize) {
