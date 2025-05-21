@@ -180,3 +180,194 @@ function handle_ajax_process_subcategory_tree() {
     wp_send_json_success($response_data);
 }
 add_action('wp_ajax_process_subcategory_tree', 'handle_ajax_process_subcategory_tree'); 
+
+/**
+ * Helper function to check if a term is a descendant of another term.
+ * @param int $term_id The ID of the potential descendant term.
+ * @param int $ancestor_id The ID of the potential ancestor term.
+ * @param string $taxonomy The taxonomy.
+ * @return bool True if $term_id is a descendant of $ancestor_id, false otherwise.
+ */
+function dcw_term_is_descendant_of($term_id, $ancestor_id, $taxonomy) {
+    if (empty($term_id) || empty($ancestor_id)) {
+        return false;
+    }
+    if ($term_id == $ancestor_id) { // A term is not its own descendant for this logic
+        return false;
+    }
+    $ancestors = get_ancestors($term_id, $taxonomy);
+    return in_array($ancestor_id, $ancestors);
+}
+
+/**
+ * Helper function to list child categories for preview when a category is moved as a block.
+ * @param int $parent_term_id The ID of the parent term.
+ * @return array A list of child category names and IDs.
+ */
+function dcw_list_child_categories_for_preview($parent_term_id) {
+    $children_data = [];
+    $child_terms = get_terms(array(
+        'taxonomy' => 'product_cat',
+        'parent' => $parent_term_id,
+        'hide_empty' => false,
+    ));
+    foreach ($child_terms as $child) {
+        $children_data[] = array(
+            'name' => $child->name,
+            'id' => $child->term_id,
+            'product_count' => dcw_get_direct_product_count_for_term($child->term_id), // Contar productos también para estos hijos
+            'children_preview' => dcw_list_child_categories_for_preview($child->term_id) // Recursivo para toda la subestructura
+        );
+    }
+    return $children_data;
+}
+
+/**
+ * Helper function to get direct product count for a term.
+ * @param int $term_id The term ID.
+ * @return int Product count.
+ */
+function dcw_get_direct_product_count_for_term($term_id) {
+    $query_args = array(
+        'post_type'      => 'product',
+        'post_status'    => 'publish',
+        'posts_per_page' => -1,
+        'fields'         => 'ids', // Solo necesitamos IDs para contar
+        'tax_query'      => array(
+            array(
+                'taxonomy'         => 'product_cat',
+                'field'            => 'term_id',
+                'terms'            => $term_id,
+                'include_children' => false // Muy importante: solo productos directos
+            )
+        )
+    );
+    $products = new WP_Query($query_args);
+    return $products->post_count;
+}
+
+/**
+ * Generates a preview of the subcategory reorganization.
+ *
+ * @param int $category_id_origin The ID of the origin category.
+ * @param int $category_id_destination The ID of the destination category.
+ * @return array An array detailing the expected changes.
+ */
+function preview_subcategory_reorganization($category_id_origin, $category_id_destination) {
+    $preview_log = [];
+    $origin_category_term = get_term($category_id_origin, 'product_cat');
+    $destination_parent_term = get_term($category_id_destination, 'product_cat');
+
+    if (!$origin_category_term || is_wp_error($origin_category_term)) {
+        $preview_log[] = sprintf(__('Error: Categoría de origen base con ID %d no encontrada.', 'delete-categories-woocommerce'), $category_id_origin);
+        return ['log' => $preview_log, 'actions' => []];
+    }
+    if (!$destination_parent_term || is_wp_error($destination_parent_term)) {
+        $preview_log[] = sprintf(__('Error: Categoría de destino base con ID %d no encontrada.', 'delete-categories-woocommerce'), $category_id_destination);
+        return ['log' => $preview_log, 'actions' => []];
+    }
+
+    // Esta previsualización es para los hijos directos de $category_id_origin
+    $preview_log[] = sprintf(__('Previsualizando reorganización de subcategorías de "%s" (ID: %d) hacia la jerarquía de "%s" (ID: %d)', 'delete-categories-woocommerce'), $origin_category_term->name, $category_id_origin, $destination_parent_term->name, $category_id_destination);
+
+    $actions = [];
+    $subcategories_to_process = get_terms(array(
+        'taxonomy' => 'product_cat',
+        'parent' => $category_id_origin, // Procesamos los hijos directos del origen actual
+        'hide_empty' => false,
+    ));
+
+    if (empty($subcategories_to_process)) {
+        $preview_log[] = sprintf(__('La categoría "%s" (ID: %d) no tiene subcategorías directas para procesar en este nivel.', 'delete-categories-woocommerce'), $origin_category_term->name, $category_id_origin);
+    }
+
+    foreach ($subcategories_to_process as $origin_term) { // $origin_term es la subcategoría que estamos evaluando
+        $action_detail = [
+            'origin_name' => $origin_term->name,
+            'origin_id' => $origin_term->term_id,
+            'product_count' => dcw_get_direct_product_count_for_term($origin_term->term_id),
+            'action' => '',
+            'target_name' => '',
+            'target_id' => null,
+            'target_parent_name' => '',
+            'target_parent_id' => null,
+            'details' => '',
+            'children_preview' => [] // Puede ser una lista de acciones o una lista de hijos
+        ];
+
+        $term_with_same_slug = get_term_by('slug', $origin_term->slug, 'product_cat');
+        $transfer_to_this_existing_term = null;
+
+        if ($term_with_same_slug && $term_with_same_slug->term_id != $origin_term->term_id) {
+            // Existe otro término con el mismo slug.
+            // ¿Está este término ($term_with_same_slug) dentro de la jerarquía de $destination_parent_term o es $destination_parent_term mismo?
+            if ($term_with_same_slug->term_id == $destination_parent_term->term_id || dcw_term_is_descendant_of($term_with_same_slug->term_id, $destination_parent_term->term_id, 'product_cat')) {
+                $transfer_to_this_existing_term = $term_with_same_slug;
+            }
+        }
+
+        if ($transfer_to_this_existing_term) {
+            // Caso 1: Transferir productos a un término existente en la jerarquía de destino. $origin_term no se mueve.
+            $action_detail['action'] = 'transferir_productos_a_existente_en_destino';
+            $action_detail['target_name'] = $transfer_to_this_existing_term->name;
+            $action_detail['target_id'] = $transfer_to_this_existing_term->term_id;
+            $parent_of_target = get_term($transfer_to_this_existing_term->parent, 'product_cat');
+            $action_detail['target_parent_name'] = $parent_of_target ? $parent_of_target->name : __('Raíz', 'delete-categories-woocommerce');
+            $action_detail['target_parent_id'] = $parent_of_target ? $parent_of_target->term_id : 0;
+            $action_detail['details'] = sprintf(
+                __('Los productos de "%1$s" (ID: %2$d) se transferirán a la categoría existente "%3$s" (ID: %4$d) encontrada en la jerarquía de destino (bajo "%5$s"). La categoría origen "%1$s" no se moverá.', 'delete-categories-woocommerce'),
+                $origin_term->name, $origin_term->term_id, $transfer_to_this_existing_term->name, $transfer_to_this_existing_term->term_id, $destination_parent_term->name
+            );
+            // Los hijos de $origin_term ahora se evalúan contra $transfer_to_this_existing_term como su nuevo destino.
+            $children_preview_result = preview_subcategory_reorganization($origin_term->term_id, $transfer_to_this_existing_term->term_id);
+            $action_detail['children_preview'] = $children_preview_result['actions'];
+            $preview_log = array_merge($preview_log, $children_preview_result['log']);
+        } else {
+            // Caso 2: Mover $origin_term (y sus hijos como un bloque) bajo $destination_parent_term.
+            $action_detail['action'] = 'mover_categoria_con_hijos';
+            $action_detail['target_name'] = $origin_term->name; // El nombre se mantiene
+            $action_detail['target_parent_name'] = $destination_parent_term->name;
+            $action_detail['target_parent_id'] = $destination_parent_term->term_id;
+            $action_detail['details'] = sprintf(
+                __('La categoría "%s" (ID: %d) y su estructura de subcategorías se moverán para ser hijas de "%s". Si ya existe un hijo directo con el mismo slug bajo "%s", WordPress podría añadir un sufijo (ej. %s-2).', 'delete-categories-woocommerce'),
+                $origin_term->name, $origin_term->term_id, $destination_parent_term->name, $destination_parent_term->name, $origin_term->slug
+            );
+            // Los hijos se mueven con el padre, su estructura interna no cambia respecto a $origin_term.
+            // Listamos los hijos para información.
+            $action_detail['children_preview'] = dcw_list_child_categories_for_preview($origin_term->term_id);
+            // No es necesario fusionar $preview_log aquí ya que dcw_list_child_categories_for_preview no genera logs de este tipo.
+        }
+        $actions[] = $action_detail;
+    }
+    return ['log' => $preview_log, 'actions' => $actions];
+}
+
+/**
+ * Handles the AJAX request for previewing subcategory reorganization.
+ */
+function handle_ajax_preview_subcategory_reorganization() {
+    check_ajax_referer('preview_subcategories_nonce', 'security'); // Usar el nonce específico para previsualización
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(['message' => __('Permisos insuficientes.', 'delete-categories-woocommerce')], 403);
+        return;
+    }
+
+    $category_id_origin = isset($_POST['category_id_origin']) ? intval($_POST['category_id_origin']) : 0;
+    $category_id_destination = isset($_POST['category_id_destination']) ? intval($_POST['category_id_destination']) : 0;
+
+    if ($category_id_origin <= 0 || $category_id_destination <= 0) {
+        wp_send_json_error(['message' => __('IDs de categoría de origen o destino inválidos para la previsualización.', 'delete-categories-woocommerce')], 400);
+        return;
+    }
+
+    if ($category_id_origin === $category_id_destination) {
+        wp_send_json_error(['message' => __('La categoría de origen y destino no pueden ser la misma para la previsualización.', 'delete-categories-woocommerce')], 400);
+        return;
+    }
+
+    $preview_data = preview_subcategory_reorganization($category_id_origin, $category_id_destination);
+
+    wp_send_json_success($preview_data);
+}
+add_action('wp_ajax_preview_subcategory_reorganization', 'handle_ajax_preview_subcategory_reorganization'); 

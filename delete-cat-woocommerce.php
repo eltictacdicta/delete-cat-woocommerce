@@ -99,8 +99,12 @@ function display_category_id_form() {
                     </tr>
                 </table>
                 
+                <button type="button" id="preview-subcategory-changes" class="button" style="margin-right: 10px;"><?php _e('Previsualizar Cambios de Subcategorías', 'delete-categories-woocommerce'); ?></button>
                 <button type="button" id="start-batch-process" class="button button-primary"><?php _e('Procesar Productos en Lote', 'delete-categories-woocommerce'); ?></button>
                 
+                <div id="preview-subcategory-results" style="margin-top: 20px; padding: 10px; border: 1px solid #ccc; background-color: #f9f9f9; max-height: 300px; overflow-y: auto;">
+                    <!-- Aquí se mostrarán los resultados de la previsualización de subcategorías -->
+                </div>
                 <div id="batch-processing-results" style="margin-top: 20px;">
                     <!-- Aquí se mostrará la barra de progreso y resultados -->
                 </div>
@@ -213,7 +217,8 @@ function dcw_enqueue_admin_styles() {
                 'transfer' => wp_create_nonce("transfer_category_nonce"),
                 'batch' => wp_create_nonce("batch_processing_nonce"),
                 'delete' => wp_create_nonce("delete_empty_cats_nonce"),
-                'delete_products' => wp_create_nonce("delete_category_products_nonce")
+                'delete_products' => wp_create_nonce("delete_category_products_nonce"),
+                'preview_subcategories' => wp_create_nonce("preview_subcategories_nonce")
             ),
             'confirmDelete' => __('¿Estás seguro de que quieres eliminar todas las categorías de producto vacías y sin subcategorías? ¡Esta acción no se puede deshacer!', 'delete-categories-woocommerce')
         ));

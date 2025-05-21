@@ -370,4 +370,157 @@ jQuery(document).ready(function($) {
             });
         }
     };
+
+    // Previsualizar cambios de subcategorías
+    $('#preview-subcategory-changes').on('click', function() {
+        const originUrl = $('#batch_category_url_origin').val();
+        const destinationUrl = $('#batch_category_url_destination').val();
+        const changeSubcategories = $('#change_subcategories').is(':checked');
+        const resultsDiv = $('#preview-subcategory-results');
+        resultsDiv.html('<p>Cargando previsualización...</p>');
+
+        if (!changeSubcategories) {
+            resultsDiv.html('<p>La opción "Cambiar Subcategorías" debe estar marcada para la previsualización.</p>');
+            return;
+        }
+        if (!originUrl || !destinationUrl) {
+            resultsDiv.html('<p>Por favor, ingresa las URLs de las categorías de origen y destino.</p>');
+            return;
+        }
+
+        // Primero, obtener los IDs de las categorías desde las URLs
+        $.ajax({
+            url: dcwData.ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'transfer_product_category', // Acción AJAX para obtener IDs
+                category_url_origin: originUrl,
+                category_url_destination: destinationUrl,
+                security: dcwData.nonces.transfer
+            },
+            success: function(response) {
+                if (response.success && response.debug) {
+                    const originId = response.debug.origin_category;
+                    const destinationId = response.debug.destination_category;
+
+                    // Ahora llamar a la previsualización con los IDs
+                    $.ajax({
+                        url: dcwData.ajaxurl,
+                        type: 'POST',
+                        data: {
+                            action: 'preview_subcategory_reorganization',
+                            category_id_origin: originId,
+                            category_id_destination: destinationId,
+                            security: dcwData.nonces.preview_subcategories // Usar el nuevo nonce
+                        },
+                        success: function(previewResponse) {
+                            if (previewResponse.success) {
+                                displayPreviewResults(previewResponse.data, resultsDiv);
+                            } else {
+                                resultsDiv.html('<p>Error al previsualizar: ' + (previewResponse.data.message || 'Error desconocido') + '</p>');
+                            }
+                        },
+                        error: function(xhr) {
+                            resultsDiv.html('<p>Error de AJAX al previsualizar: ' + xhr.statusText + '</p>');
+                        }
+                    });
+                } else {
+                    resultsDiv.html('<p>Error al obtener IDs de categoría: ' + (response.message || 'Error desconocido') + '</p>');
+                }
+            },
+            error: function(xhr) {
+                resultsDiv.html('<p>Error de AJAX al obtener IDs de categoría: ' + xhr.statusText + '</p>');
+            }
+        });
+    });
+
+    function displayPreviewResults(data, container) {
+        let html = '<h4>Resultados de la Previsualización:</h4>';
+        if (data.log && data.log.length > 0) {
+            html += '<h5>Log:</h5><ul>';
+            data.log.forEach(function(entry) {
+                html += '<li>' + entry + '</li>';
+            });
+            html += '</ul>';
+        }
+
+        if (data.actions && data.actions.length > 0) {
+            html += '<h5>Acciones de Reorganización Propuestas:</h5>';
+            html += formatPreviewActions(data.actions, 0);
+        } else {
+            html += '<p>No se proponen acciones de reorganización o no hay subcategorías para procesar.</p>';
+        }
+        container.html(html);
+    }
+
+    function formatPreviewActions(actions, level) {
+        let listHtml = '<ul style="list-style-type: none; padding-left: ' + (level * 20) + 'px;">';
+        actions.forEach(function(action) {
+            listHtml += '<li style="margin-bottom: 10px; padding: 5px; border-left: 3px solid #0073aa;">';
+            listHtml += '<strong>Subcategoría Origen:</strong> ' + action.origin_name + ' (ID: ' + action.origin_id + ')';
+            if (typeof action.product_count !== 'undefined') {
+                listHtml += ' - <em>' + action.product_count + (action.product_count === 1 ? ' producto directo' : ' productos directos') + '</em>';
+            }
+            listHtml += '<br>';
+            let actionText = '';
+            switch(action.action) {
+                case 'transferir_productos_a_existente_en_destino':
+                    actionText = '<strong>Acción:</strong> <span style="color: purple;">TRANSFERIR PRODUCTOS</span> a la categoría existente \'' + action.target_name + '\' (ID: ' + action.target_id + ') bajo \'' + action.target_parent_name + '\'. La categoría origen \'' + action.origin_name + '\' no se mueve.';
+                    break;
+                case 'mover_categoria_con_hijos':
+                    actionText = '<strong>Acción:</strong> <span style="color: orange;">MOVER CATEGORÍA Y SU ESTRUCTURA</span> a ser hija de \'' + action.target_parent_name + '\'.';
+                    break;
+                // Mantener casos anteriores por si acaso o para lógica mixta futura
+                case 'fusionar': // Este caso podría ser obsoleto o necesitar re-evaluación con la nueva lógica
+                    actionText = '<strong>Acción:</strong> <span style="color: blue;">FUSIONAR (Lógica Antigua)</span> con ' + action.target_name + ' (ID: ' + action.target_id + ') bajo ' + action.target_parent_name + '.';
+                    break;
+                case 'mover_y_renombrar_si_es_necesario': // Este caso podría ser obsoleto o necesitar re-evaluación
+                    actionText = '<strong>Acción:</strong> <span style="color: green;">MOVER (Lógica Antigua)</span> a ser hija de ' + action.target_parent_name + '.';
+                    break;
+                default:
+                    actionText = '<strong>Acción:</strong> Desconocida (' + action.action + ')';
+            }
+            listHtml += actionText + '<br>';
+            if (action.details) {
+                listHtml += '<em>Detalles:</em> ' + action.details + '<br>';
+            }
+
+            if (action.children_preview && action.children_preview.length > 0) {
+                if (action.action === 'transferir_productos_a_existente_en_destino') {
+                    // Para esta acción, children_preview contiene más *acciones* para los hijos de origin_name
+                    // contra el target_name como nuevo destino.
+                    listHtml += '<strong>Sub-proceso para hijos de \'' + action.origin_name + '\' (evaluados contra \'' + action.target_name + '\'):</strong>';
+                    listHtml += formatPreviewActions(action.children_preview, level + 1); // Recursión con la misma función
+                } else if (action.action === 'mover_categoria_con_hijos') {
+                    // Para esta acción, children_preview es una lista de la estructura de hijos que se mueven con el padre.
+                    listHtml += '<strong>Estructura de subcategorías que se mueven con \'' + action.origin_name + '\':</strong>';
+                    listHtml += formatSimpleChildrenList(action.children_preview, level + 1);
+                } else {
+                    // Fallback para lógica antigua si aún es posible
+                    listHtml += '<strong>Hijos de \'' + action.origin_name + '\':</strong>';
+                    listHtml += formatPreviewActions(action.children_preview, level + 1);
+                }
+            }
+            listHtml += '</li>';
+        });
+        listHtml += '</ul>';
+        return listHtml;
+    }
+
+    // Nueva función para formatear una lista simple de hijos (cuando se mueven como bloque)
+    function formatSimpleChildrenList(children, level) {
+        let listHtml = '<ul style="list-style-type: circle; padding-left: ' + (level * 20) + 'px;">';
+        children.forEach(function(child) {
+            listHtml += '<li>' + child.name + ' (ID: ' + child.id + ')';
+            if (typeof child.product_count !== 'undefined') {
+                listHtml += ' - <em>' + child.product_count + (child.product_count === 1 ? ' producto directo' : ' productos directos') + '</em>';
+            }
+            if (child.children_preview && child.children_preview.length > 0) {
+                listHtml += formatSimpleChildrenList(child.children_preview, level + 1);
+            }
+            listHtml += '</li>';
+        });
+        listHtml += '</ul>';
+        return listHtml;
+    }
 }); 
