@@ -5,6 +5,7 @@ jQuery(document).ready(function($) {
         const destinationUrl = $('#batch_category_url_destination').val();
         const batchSize = $('#batch_size').val();
         const resultsDiv = $('#batch-processing-results');
+        const changeSubcategories = $('#change_subcategories').is(':checked');
         
         if(!originUrl || !destinationUrl) {
             resultsDiv.html('<div class="notice notice-error"><p>Por favor, ingresa las URLs de ambas categorías.</p></div>');
@@ -21,6 +22,7 @@ jQuery(document).ready(function($) {
                 action: 'transfer_product_category',
                 category_url_origin: originUrl,
                 category_url_destination: destinationUrl,
+                change_subcategories: changeSubcategories,
                 security: dcwData.nonces.transfer
             },
             success: function(response) {
@@ -41,7 +43,7 @@ jQuery(document).ready(function($) {
                     <div id="batch-progress-container"></div>
                 `);
                 
-                processBatch(originCategoryId, destinationCategoryId, batchSize);
+                processBatch(originCategoryId, destinationCategoryId, batchSize, changeSubcategories);
             },
             error: () => resultsDiv.html('<div class="notice notice-error"><p>Error al obtener información de las categorías.</p></div>')
         });
@@ -224,7 +226,7 @@ jQuery(document).ready(function($) {
     $('#delete-category-products-btn').on('click', dcwDeleteCategoryProducts);
 
     // Función auxiliar para procesamiento por lotes
-    const processBatch = function(originCategoryId, destinationCategoryId, batchSize) {
+    const processBatch = function(originCategoryId, destinationCategoryId, batchSize, changeSubcategories) {
         const progressContainer = $('#batch-progress-container');
         const processAll = $('#process_all').is(':checked');
 
@@ -236,148 +238,136 @@ jQuery(document).ready(function($) {
             <div id="dcw-status-messages" class="dcw-status-messages"></div>
         `);
 
-        $.ajax({
-            type: 'POST',
-            url: dcwData.ajaxurl,
-            dataType: 'json',
-            data: {
-                action: 'get_product_ids',
-                category_id_origin: originCategoryId,
-                security: dcwData.nonces.batch
-            },
-            success: function(response) {
-                if(response.success) {
-                    const productIds = response.data.product_ids;
-                    
-                    if (productIds.length === 0) {
-                        $('#dcw-progress-bar').css('width', '100%').text('100%');
-                        $('#dcw-current-operation').html('No hay productos para procesar');
-                        $('#dcw-status-messages').prepend(
-                            `<div class="notice notice-warning">
-                                <p>No se encontraron productos en la categoría de origen (ID: ${originCategoryId})</p>
-                            </div>`
-                        );
-                        return;
+        if (changeSubcategories) {
+            $('#dcw-current-operation').text('Procesando estructura de subcategorías...');
+            $.ajax({
+                type: 'POST',
+                url: dcwData.ajaxurl,
+                dataType: 'json',
+                data: {
+                    action: 'process_subcategory_tree',
+                    category_id_origin: originCategoryId,
+                    category_id_destination: destinationCategoryId,
+                    security: dcwData.nonces.batch
+                },
+                success: function(response) {
+                    $('#dcw-progress-bar').css('width', '100%').text('100%');
+                    if (response.success && response.data && response.data.log) {
+                        $('#dcw-current-operation').text('Proceso de subcategorías completado.');
+                        response.data.log.forEach(function(log_message) {
+                            $('#dcw-status-messages').append('<p><small>' + log_message + '</small></p>');
+                        });
+                        let summary = `Resumen: ${response.data.success_count || 0} productos movidos, ${response.data.parent_changed_count || 0} subcategorías re-parentadas, ${response.data.failed_count || 0} errores.`;
+                        $('#dcw-status-messages').append('<p><strong>' + summary + '</strong></p>');
+                    } else {
+                        $('#dcw-current-operation').text('Error procesando subcategorías.');
+                        $('#dcw-status-messages').append('<p class="dcw-error-message">'+ (response.data.message || 'Error desconocido.') + '</p>');
                     }
-                    
-                    const totalProducts = processAll ? productIds.length : Math.min(productIds.length, batchSize);
-                    
-                    let processedCount = 0;
-                    let successCount = 0;
-                    let failureCount = 0;
-                    
-                    const processNextProduct = (index) => {
-                        if(index >= totalProducts) {
-                            $('#dcw-progress-bar').css('width', '100%').text('100%');
-                            $('#dcw-current-operation').html('Proceso completado');
-                            $('#dcw-status-messages').prepend(
-                                `<div class="notice notice-success">
-                                    <p>✅ ${totalProducts} productos procesados</p>
-                                    <p>${successCount} exitosos - ${failureCount} con errores</p>
-                                </div>`
-                            );
+                },
+                error: function(xhr) {
+                    $('#dcw-progress-bar').css('width', '100%').text('Error');
+                    $('#dcw-current-operation').text('Error en la solicitud AJAX para subcategorías.');
+                    $('#dcw-status-messages').append('<p class="dcw-error-message">'+ (xhr.responseJSON?.data?.message || xhr.statusText || 'Error de conexión') + '</p>');
+                }
+            });
+        } else {
+            // Original product-by-product processing (if not changing subcategories)
+            $.ajax({
+                type: 'POST',
+                url: dcwData.ajaxurl,
+                dataType: 'json',
+                data: {
+                    action: 'get_product_ids',
+                    category_id_origin: originCategoryId,
+                    change_subcategories: false,
+                    security: dcwData.nonces.batch
+                },
+                success: function(response) {
+                    if(response.success) {
+                        const productIds = response.data.product_ids;
+                        if (productIds.length === 0) {
+                            $('#dcw-current-operation').text('No hay productos para procesar en la categoría origen.');
+                            $('#dcw-progress-bar').css('width', '100%').text('N/A');
                             return;
                         }
 
-                        const progress = Math.round(((index + 1) / totalProducts) * 100);
-                        $('#dcw-progress-bar').css('width', `${progress}%`).text(`${progress}%`);
-                        $('#dcw-current-operation').html(`Procesando producto ${index + 1} de ${totalProducts}`);
+                        let currentBatch = [];
+                        let processedInLoop = 0;
+                        const productsToProcess = processAll ? productIds.length : Math.min(productIds.length, parseInt(batchSize, 10));
                         
-                        $.ajax({
-                            type: 'POST',
-                            url: dcwData.ajaxurl,
-                            dataType: 'json',
-                            data: {
-                                action: 'process_single_product',
-                                product_id: productIds[index],
-                                category_id_origin: originCategoryId,
-                                category_id_destination: destinationCategoryId,
-                                security: dcwData.nonces.batch
-                            },
-                            success: function(response) {
-                                processedCount++;
-                                
-                                if(response.success) {
-                                    successCount++;
-                                    const messages = response.data.messages?.join('<br>') || 'Sin detalles';
-                                    $('#dcw-status-messages').prepend(`
-                                        <div class="notice notice-success">
-                                            <h4>${response.data.product_title} (ID: ${productIds[index]})</h4>
-                                            <div class="product-details">${messages}</div>
-                                        </div>
-                                    `);
-                                } else {
-                                    failureCount++;
-                                    $('#dcw-status-messages').prepend(`
-                                        <div class="notice notice-error">
-                                            <h4>Error en producto ID: ${productIds[index]}</h4>
-                                            <p>${response.data?.messages?.join('<br>') || response.message || 'Error desconocido'}</p>
-                                        </div>
-                                    `);
-                                }
-                                
-                                // Procesar el siguiente producto
-                                processNextProduct(index + 1);
-                            },
-                            error: function(xhr) {
-                                processedCount++;
-                                failureCount++;
-                                
-                                const errorMessage = xhr.responseJSON?.message || 'Error de conexión';
-                                
-                                $('#dcw-status-messages').prepend(`
-                                    <div class="notice notice-error">
-                                        <h4>Error en producto ID: ${productIds[index]}</h4>
-                                        <p>${errorMessage}</p>
-                                        ${xhr.status ? `<p>Código error: ${xhr.status}</p>` : ''}
-                                    </div>
-                                `);
-                                
-                                // Procesar el siguiente producto a pesar del error
-                                processNextProduct(index + 1);
-                            }
-                        });
-                    };
+                        // If not processAll, slice the productIds to the batchSize
+                        const idsForLoop = processAll ? productIds : productIds.slice(0, productsToProcess);
 
-                    // Iniciar el procesamiento con el primer producto
-                    processNextProduct(0);
-                } else {
-                    $('#dcw-progress-bar').css('width', '100%').text('100%');
-                    $('#dcw-current-operation').html('Error al obtener productos');
-                    $('#dcw-status-messages').prepend(
-                        `<div class="notice notice-error">
-                            <p>${response.message || 'No se pudieron obtener los productos para procesar'}</p>
-                        </div>`
-                    );
-                }
-            },
-            error: function(xhr) {
-                const errorDetails = xhr.responseJSON?.data || 'Error desconocido';
-                const errorMessage = `Error ${xhr.status}: ${errorDetails}`;
-                
-                $('#batch-progress-container').html(`
-                    <div class="notice notice-error">
-                        <h4>Error al obtener productos</h4>
-                        <p>${errorMessage}</p>
-                        <p>Acciones:</p>
-                        <ul>
-                            <li>Verificar que las categorías existen</li>
-                            <li>Recargar la página para renovar nonces</li>
-                            <li>Revisar consola para más detalles</li>
-                        </ul>
-                    </div>
-                `);
-                
-                console.error('Error en get_product_ids:', {
-                    status: xhr.status,
-                    response: xhr.responseJSON,
-                    requestData: {
-                        originCategoryId,
-                        destinationCategoryId,
-                        batchSize
+                        let processedCount = 0;
+                        let successCount = 0;
+                        let failedCount = 0;
+                        let skippedCount = 0; // This might not be directly applicable with current batch_replace_product_categories
+                        const totalProductsToProcessInLoop = idsForLoop.length;
+
+                        const processNextProductInLoop = (index) => {
+                            if (index >= totalProductsToProcessInLoop) {
+                                $('#dcw-current-operation').text('Proceso completado.');
+                                $('#dcw-status-messages').append('<p><strong>Resumen final:</strong> ' + successCount + ' exitosos, ' + failedCount + ' fallidos de ' + totalProductsToProcessInLoop + ' productos seleccionados.</p>');
+                                return;
+                            }
+
+                            const productId = idsForLoop[index];
+                            $('#dcw-current-operation').text('Procesando producto ID: ' + productId + ' (' + (index + 1) + '/' + totalProductsToProcessInLoop + ')');
+
+                            $.ajax({
+                                type: 'POST',
+                                url: dcwData.ajaxurl,
+                                dataType: 'json',
+                                data: {
+                                    action: 'batch_process_categories',
+                                    product_ids: [productId],
+                                    category_id_origin: originCategoryId,
+                                    category_id_destination: destinationCategoryId,
+                                    security: dcwData.nonces.batch
+                                },
+                                success: function(batchResponse) {
+                                    processedCount++;
+                                    if(batchResponse.success && batchResponse.results) {
+                                        successCount += batchResponse.results.success || 0;
+                                        failedCount += batchResponse.results.failed || 0;
+                                        skippedCount += batchResponse.results.skipped || 0;
+                                        if(batchResponse.results.log && batchResponse.results.log.length > 0){
+                                            batchResponse.results.log.forEach(function(log_message){
+                                                $('#dcw-status-messages').append('<p><small>' + log_message + '</small></p>');
+                                            });
+                                        }
+                                    } else if (batchResponse.success) {
+                                        successCount++;
+                                        $('#dcw-status-messages').append('<p>Producto ID ' + productId + ': ' + batchResponse.message + '</p>');
+                                    } else {
+                                        failedCount++;
+                                        $('#dcw-status-messages').append('<p class="dcw-error-message">Producto ID ' + productId + ': Error - ' + (batchResponse.message || 'Error desconocido') + '</p>');
+                                    }
+                                    const percentage = Math.round((processedCount / totalProductsToProcessInLoop) * 100);
+                                    $('#dcw-progress-bar').css('width', percentage + '%').text(percentage + '%');
+                                    setTimeout(() => processNextProductInLoop(index + 1), 100);
+                                },
+                                error: function(xhr, status, error) {
+                                    processedCount++;
+                                    failedCount++;
+                                    $('#dcw-status-messages').append('<p class="dcw-error-message">Producto ID ' + productId + ': Falló la solicitud AJAX. ('+error+')</p>');
+                                    const percentage = Math.round((processedCount / totalProductsToProcessInLoop) * 100);
+                                    $('#dcw-progress-bar').css('width', percentage + '%').text(percentage + '%');
+                                    setTimeout(() => processNextProductInLoop(index + 1), 100);
+                                }
+                            });
+                        };
+                        processNextProductInLoop(0);
+                    } else {
+                        $('#dcw-current-operation').text('Error obteniendo IDs de productos.');
+                        $('#dcw-status-messages').append('<p class="dcw-error-message">'+ (response.data.message || 'Error desconocido') + '</p>');
                     }
-                });
-            }
-        });
+                },
+                error: function(xhr) {
+                     $('#dcw-current-operation').text('Error en la solicitud AJAX para obtener IDs de productos.');
+                     $('#dcw-status-messages').append('<p class="dcw-error-message">'+ (xhr.responseJSON?.data?.message || xhr.statusText || 'Error de conexión') + '</p>');
+                }
+            });
+        }
     };
 }); 

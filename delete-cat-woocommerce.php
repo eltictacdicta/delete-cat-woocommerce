@@ -86,8 +86,15 @@ function display_category_id_form() {
                     <tr>
                         <th scope="row"><label for="process_all"><?php _e('Procesar Todos', 'delete-categories-woocommerce'); ?></label></th>
                         <td>
-                            <input type="checkbox" name="process_all" id="process_all">
+                            <input type="checkbox" name="process_all" id="process_all" checked>
                             <p class="description"><?php _e('Marca esta casilla para procesar todos los productos sin límite.', 'delete-categories-woocommerce'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="change_subcategories"><?php _e('Cambiar Subcategorías', 'delete-categories-woocommerce'); ?></label></th>
+                        <td>
+                            <input type="checkbox" name="change_subcategories" id="change_subcategories">
+                            <p class="description"><?php _e('Marca esta casilla para procesar también las subcategorías.', 'delete-categories-woocommerce'); ?></p>
                         </td>
                     </tr>
                 </table>
@@ -228,6 +235,7 @@ function handle_ajax_get_product_ids() {
     }
 
     $category_id = isset($_POST['category_id_origin']) ? intval($_POST['category_id_origin']) : 0;
+    $change_subcategories = isset($_POST['change_subcategories']) ? filter_var($_POST['change_subcategories'], FILTER_VALIDATE_BOOLEAN) : false;
     
     if ($category_id <= 0) {
         wp_send_json_error('ID de categoría inválido');
@@ -244,7 +252,7 @@ function handle_ajax_get_product_ids() {
                 'taxonomy' => 'product_cat',
                 'field' => 'term_id',
                 'terms' => $category_id,
-                'include_children' => true,
+                'include_children' => $change_subcategories,
             )
         )
     );

@@ -298,7 +298,8 @@ function batch_replace_product_categories($product_ids, $category_to_unlink, $ca
         'success' => 0,
         'failed' => 0,
         'skipped' => 0,
-        'details' => array()
+        'details' => array(),
+        'log' => array()
     );
     
     // Verificar que las categorías existan
@@ -349,6 +350,11 @@ function batch_replace_product_categories($product_ids, $category_to_unlink, $ca
                 $replace_result = replace_product_category($product_id, $category_to_unlink, $category_to_assign);
                 $results['processed']++;
                 
+                // Accumulate messages into the main log
+                if (isset($replace_result['messages']) && is_array($replace_result['messages'])) {
+                    $results['log'] = array_merge($results['log'], $replace_result['messages']);
+                }
+
                 // Actualizar resultados
                 if ($replace_result['success']) {
                     $results['success']++;
@@ -491,4 +497,139 @@ function handle_ajax_process_single_product() {
 
 // Registrar el handler AJAX para procesar productos individuales
 add_action('wp_ajax_process_single_product', 'handle_ajax_process_single_product');
+
+// Helper function to get subcategories
+function dcw_get_subcategories($parent_id, $taxonomy = 'product_cat', $depth = 1) {
+    $args = [
+        'taxonomy'   => $taxonomy,
+        'parent'     => $parent_id,
+        'hide_empty' => false,
+        // 'depth' parameter for get_terms usually means levels deep from the top-most, not from current parent.
+        // We might need to fetch all children and then filter by parent's depth + $depth if direct depth control isn't precise enough.
+        // For now, assuming 'parent' gives immediate children, and we'll handle depth by recursion if needed for L2.
+    ];
+    $terms = get_terms($args);
+    if (is_wp_error($terms)) {
+        return [];
+    }
+    return $terms;
+}
+
+function process_categories_with_subcategories($category_id_origin, $category_id_destination, $all_product_ids_in_origin_tree) {
+    $results = [
+        'success' => 0,
+        'failed'  => 0,
+        'skipped' => 0, // For products that might not need moving or are already in place
+        'parent_changed_count' => 0,
+        'log'     => [],
+    ];
+
+    // 1. Move direct products from origin to destination
+    // These are products directly in category_id_origin, not its children categories yet.
+    $direct_products_args = [
+        'post_type'      => 'product',
+        'post_status'    => 'publish',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+        'tax_query'      => [
+            [
+                'taxonomy'         => 'product_cat',
+                'field'            => 'term_id',
+                'terms'            => $category_id_origin,
+                'include_children' => false, // Important: only direct products
+            ],
+        ],
+    ];
+    $direct_product_ids = get_posts($direct_products_args);
+
+    $results['log'][] = "Processing direct products from origin category ID: {$category_id_origin} to destination ID: {$category_id_destination}";
+    if (!empty($direct_product_ids)) {
+        $direct_move_result = batch_replace_product_categories($direct_product_ids, $category_id_origin, $category_id_destination, false); // false for echo_progress
+        $results['success'] += $direct_move_result['success'];
+        $results['failed']  += $direct_move_result['failed'];
+        $results['skipped'] += $direct_move_result['skipped'];
+        $results['log'] = array_merge($results['log'], $direct_move_result['log']);
+    }
+
+    // 2. Process Subcategories (Level 1 and Level 2)
+    $source_l1_subcats = dcw_get_subcategories($category_id_origin);
+    $dest_l1_subcats   = dcw_get_subcategories($category_id_destination);
+
+    foreach ($source_l1_subcats as $source_l1_subcat) {
+        $results['log'][] = "Processing L1 subcategory: '{$source_l1_subcat->name}' (ID: {$source_l1_subcat->term_id})";
+        $found_l1_match = false;
+        foreach ($dest_l1_subcats as $dest_l1_subcat) {
+            if (strtolower($source_l1_subcat->name) === strtolower($dest_l1_subcat->name)) {
+                $results['log'][] = "  Found L1 match in destination: '{$dest_l1_subcat->name}' (ID: {$dest_l1_subcat->term_id})";
+                // Move products from source_l1_subcat to dest_l1_subcat
+                $l1_products_args = [
+                    'post_type' => 'product', 'post_status' => 'publish', 'posts_per_page' => -1, 'fields' => 'ids',
+                    'tax_query' => [['taxonomy' => 'product_cat', 'field' => 'term_id', 'terms' => $source_l1_subcat->term_id, 'include_children' => false]],
+                ];
+                $l1_product_ids = get_posts($l1_products_args);
+                if (!empty($l1_product_ids)) {
+                    $move_l1_result = batch_replace_product_categories($l1_product_ids, $source_l1_subcat->term_id, $dest_l1_subcat->term_id, false);
+                    $results['success'] += $move_l1_result['success'];
+                    $results['failed']  += $move_l1_result['failed'];
+                    $results['skipped'] += $move_l1_result['skipped'];
+                    $results['log'] = array_merge($results['log'], $move_l1_result['log']);
+                }
+
+                // Process Level 2 subcategories
+                $source_l2_subcats = dcw_get_subcategories($source_l1_subcat->term_id);
+                $dest_l2_subcats   = dcw_get_subcategories($dest_l1_subcat->term_id);
+
+                foreach ($source_l2_subcats as $source_l2_subcat) {
+                    $results['log'][] = "  Processing L2 subcategory: '{$source_l2_subcat->name}' (ID: {$source_l2_subcat->term_id}) under '{$source_l1_subcat->name}'";
+                    $found_l2_match = false;
+                    foreach ($dest_l2_subcats as $dest_l2_subcat) {
+                        if (strtolower($source_l2_subcat->name) === strtolower($dest_l2_subcat->name)) {
+                            $results['log'][] = "    Found L2 match: '{$dest_l2_subcat->name}' (ID: {$dest_l2_subcat->term_id}) under '{$dest_l1_subcat->name}'";
+                            // Move products from source_l2_subcat to dest_l2_subcat
+                            $l2_products_args = [
+                                'post_type' => 'product', 'post_status' => 'publish', 'posts_per_page' => -1, 'fields' => 'ids',
+                                'tax_query' => [['taxonomy' => 'product_cat', 'field' => 'term_id', 'terms' => $source_l2_subcat->term_id, 'include_children' => false]],
+                            ];
+                            $l2_product_ids = get_posts($l2_products_args);
+                            if (!empty($l2_product_ids)) {
+                                $move_l2_result = batch_replace_product_categories($l2_product_ids, $source_l2_subcat->term_id, $dest_l2_subcat->term_id, false);
+                                $results['success'] += $move_l2_result['success'];
+                                $results['failed']  += $move_l2_result['failed'];
+                                $results['skipped'] += $move_l2_result['skipped'];
+                                $results['log'] = array_merge($results['log'], $move_l2_result['log']);
+                            }
+                            $found_l2_match = true;
+                            break;
+                        }
+                    }
+                    if (!$found_l2_match) {
+                        $results['log'][] = "    No L2 match for '{$source_l2_subcat->name}'. Changing its parent to '{$dest_l1_subcat->name}' (ID: {$dest_l1_subcat->term_id})";
+                        $update_term_result = wp_update_term($source_l2_subcat->term_id, 'product_cat', ['parent' => $dest_l1_subcat->term_id]);
+                        if (is_wp_error($update_term_result)) {
+                            $results['failed']++;
+                            $results['log'][] = "    ERROR changing parent for L2 subcategory '{$source_l2_subcat->name}': " . $update_term_result->get_error_message();
+                        } else {
+                            $results['parent_changed_count']++;
+                            $results['log'][] = "    SUCCESS changing parent for L2 subcategory '{$source_l2_subcat->name}'.";
+                        }
+                    }
+                }
+                $found_l1_match = true;
+                break;
+            }
+        }
+        if (!$found_l1_match) {
+            $results['log'][] = "  No L1 match for '{$source_l1_subcat->name}'. Changing its parent to destination category (ID: {$category_id_destination})";
+            $update_term_result = wp_update_term($source_l1_subcat->term_id, 'product_cat', ['parent' => $category_id_destination]);
+            if (is_wp_error($update_term_result)) {
+                $results['failed']++; // Or a more specific counter for parent change failures
+                $results['log'][] = "  ERROR changing parent for L1 subcategory '{$source_l1_subcat->name}': " . $update_term_result->get_error_message();
+            } else {
+                $results['parent_changed_count']++;
+                $results['log'][] = "  SUCCESS changing parent for L1 subcategory '{$source_l1_subcat->name}'.";
+            }
+        }
+    }
+    return $results;
+}
 
