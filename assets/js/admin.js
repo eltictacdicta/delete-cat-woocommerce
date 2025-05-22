@@ -219,11 +219,94 @@ jQuery(document).ready(function($) {
         });
     };
 
+    // Nueva función para eliminar productos por SKU
+    const dcwDeleteProductsBySku = function() {
+        const skusString = $('#skus_to_delete').val();
+        const resultsDiv = $('#delete-sku-results');
+        const deleteImages = $('#delete_sku_images').is(':checked');
+        
+        if(!skusString.trim()) {
+            resultsDiv.html('<div class="notice notice-error"><p>Por favor, ingresa una lista de SKUs.</p></div>');
+            return;
+        }
+
+        // Mostrar confirmación
+        if(!confirm('¿Estás seguro de que deseas eliminar estos productos por SKU? Esta acción no se puede deshacer.')) {
+            return;
+        }
+
+        if (deleteImages && !confirm(dcwData.confirmDeleteSkuImages)) {
+            return;
+        }
+
+        resultsDiv.html('<div class="notice notice-info"><p>Procesando eliminación por SKU...</p></div>');
+
+        $.ajax({
+            type: 'POST',
+            url: dcwData.ajaxurl,
+            dataType: 'json',
+            data: {
+                action: 'delete_products_by_sku',
+                skus: skusString,
+                delete_images: deleteImages,
+                security: dcwData.nonces.delete_by_sku
+            },
+            success: function(response) {
+                if(response.success) {
+                    let statsHtml = '';
+                    if(response.data) {
+                        statsHtml = `
+                            <h4>Resultados:</h4>
+                            <ul>
+                                <li>Total de SKUs en la lista: ${response.data.total_skus}</li>
+                                <li>Productos eliminados exitosamente: ${response.data.deleted_count}</li>
+                            </ul>
+                        `;
+
+                        if (response.data.not_found_skus && response.data.not_found_skus.length > 0) {
+                            statsHtml += `<p>SKUs no encontrados: ${response.data.not_found_skus.join(', ')}</p>`;
+                        }
+
+                        if (response.data.failed_to_delete_skus && response.data.failed_to_delete_skus.length > 0) {
+                             statsHtml += `<p>SKUs con errores al eliminar: ${response.data.failed_to_delete_skus.join(', ')}</p>`;
+                        }
+                    }
+                    
+                    let logHtml = '';
+                    if(response.data.log && response.data.log.length > 0) {
+                        logHtml = '<h4>Registro de operaciones:</h4><div class="dcw-log-container">';
+                        response.data.log.forEach(logEntry => {
+                            logHtml += `<div class="log-entry">${logEntry}</div>`;
+                        });
+                        logHtml += '</div>';
+                    }
+
+                    resultsDiv.html(`
+                        <div class="notice notice-success">
+                            <p>✅ Eliminación por SKU completada.</p>
+                            ${statsHtml}
+                            ${logHtml}
+                        </div>
+                    `);
+                } else {
+                    resultsDiv.html(`<div class="notice notice-error"><p>❌ ${response.data.message || 'Error al procesar la solicitud'}</p></div>`);
+                }
+            },
+            error: (xhr) => {
+                const errorMessage = xhr.responseJSON?.data?.message ? 
+                    `Error: ${xhr.responseJSON.data.message}` : 
+                    `Error en la conexión (${xhr.status})`;
+                resultsDiv.html(`<div class="notice notice-error"><p>${errorMessage}</p></div>`);
+            }
+        });
+    };
+
     // Luego asigna los event handlers
     $('#start-batch-process').on('click', dcwBatchProcessing);
     $('#delete-empty-categories').on('click', dcwDeleteEmptyCategories);
     $('#excel-import-form').on('submit', dcwProcessExcel);
     $('#delete-category-products-btn').on('click', dcwDeleteCategoryProducts);
+    $('#delete-products-by-sku-btn').on('click', dcwDeleteProductsBySku);
 
     // Función auxiliar para procesamiento por lotes
     const processBatch = function(originCategoryId, destinationCategoryId, batchSize, changeSubcategories) {

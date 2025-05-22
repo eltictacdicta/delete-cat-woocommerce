@@ -46,6 +46,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/func-excel.php';
 require_once plugin_dir_path(__FILE__) . 'includes/delete-empty-categories.php';
 require_once plugin_dir_path(__FILE__) . 'includes/delete-empty-logic.php';
 require_once plugin_dir_path(__FILE__) . 'includes/delete-category-products.php';
+require_once plugin_dir_path(__FILE__) . 'includes/delete-products-by-sku.php';
 
 /**
  * Muestra un formulario para ingresar la URL de una categoría y devuelve sus productos.
@@ -170,6 +171,34 @@ function display_category_id_form() {
             </form>
             <div id="excel-results" style="margin-top: 20px;"></div>
         </div>
+
+        <div class="card dcw-form-section" style="margin-top: 20px;">
+            <h2><?php _e('Eliminar Productos por SKU', 'delete-categories-woocommerce'); ?></h2>
+            <p><?php _e('Ingresa una lista de SKUs, uno por línea, para eliminar productos específicos.', 'delete-categories-woocommerce'); ?></p>
+            <form id="delete-products-by-sku-form" method="post">
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><label for="skus_to_delete"><?php _e('Lista de SKUs', 'delete-categories-woocommerce'); ?></label></th>
+                        <td>
+                            <textarea name="skus_to_delete" id="skus_to_delete" class="large-text code" rows="10" required placeholder="SKU1\nSKU2\nSKU3"></textarea>
+                            <p class="description"><?php _e('Introduce los SKUs, uno por línea.', 'delete-categories-woocommerce'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><?php _e('Opciones Adicionales', 'delete-categories-woocommerce'); ?></th>
+                        <td>
+                            <label for="delete_sku_images">
+                                <input type="checkbox" name="delete_sku_images" id="delete_sku_images">
+                                <?php _e('Eliminar imágenes asociadas (imagen destacada y galería)', 'delete-categories-woocommerce'); ?>
+                            </label>
+                            <p class="description"><?php _e('Marca esta casilla para eliminar las imágenes subidas al producto desde la biblioteca de medios.', 'delete-categories-woocommerce'); ?></p>
+                        </td>
+                    </tr>
+                </table>
+                <button type="button" id="delete-products-by-sku-btn" class="button button-danger"><?php _e('Eliminar Productos por SKU', 'delete-categories-woocommerce'); ?></button>
+                <div id="delete-sku-results" style="margin-top: 20px;"></div>
+            </form>
+        </div>
     </div>
     <?php
 }
@@ -218,9 +247,11 @@ function dcw_enqueue_admin_styles() {
                 'batch' => wp_create_nonce("batch_processing_nonce"),
                 'delete' => wp_create_nonce("delete_empty_cats_nonce"),
                 'delete_products' => wp_create_nonce("delete_category_products_nonce"),
-                'preview_subcategories' => wp_create_nonce("preview_subcategories_nonce")
+                'preview_subcategories' => wp_create_nonce("preview_subcategories_nonce"),
+                'delete_by_sku' => wp_create_nonce("delete_products_by_sku_nonce")
             ),
-            'confirmDelete' => __('¿Estás seguro de que quieres eliminar todas las categorías de producto vacías y sin subcategorías? ¡Esta acción no se puede deshacer!', 'delete-categories-woocommerce')
+            'confirmDelete' => __('¿Estás seguro de que quieres eliminar todas las categorías de producto vacías y sin subcategorías? ¡Esta acción no se puede deshacer!', 'delete-categories-woocommerce'),
+            'confirmDeleteSkuImages' => __('¡Atención! Si marcas la opción de eliminar imágenes, estas serán eliminadas permanentemente de la biblioteca de medios. ¿Estás seguro?', 'delete-categories-woocommerce')
         ));
     }
 }
@@ -230,6 +261,7 @@ add_action('admin_enqueue_scripts', 'dcw_enqueue_admin_styles');
 add_action('wp_ajax_delete_empty_product_categories', 'handle_ajax_delete_empty_product_categories');
 add_action('wp_ajax_get_product_ids', 'handle_ajax_get_product_ids');
 add_action('wp_ajax_delete_category_products', 'handle_ajax_delete_category_products');
+add_action('wp_ajax_delete_products_by_sku', 'handle_ajax_delete_products_by_sku');
 
 // Agregar esta nueva función
 function handle_ajax_get_product_ids() {
